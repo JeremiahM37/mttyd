@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phonetty"
+version = "0.1.0"
+description = "Mobile-friendly wrapper around ttyd — touch scroll, command bar, tmux scrollback replay."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Jeremiah Mackey" }]
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pyyaml>=6.0",
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Terminals",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "httpx>=0.27"]
+
+[project.scripts]
+phonetty = "phonetty.server:main"
+
+[project.urls]
+Homepage = "https://github.com/JeremiahM37/phonetty"
+
+[tool.setuptools.packages.find]
+include = ["phonetty*"]
+
+[tool.setuptools.package-data]
+phonetty = ["static/*.html"]

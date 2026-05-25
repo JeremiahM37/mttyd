@@ -1,0 +1,16 @@
+# phonetty config — map each ttyd port to a bash_history source.
+# History is used to seed the in-page command-suggestion dropdown.
+#
+# Each port entry has a `history` key with one of two shapes:
+#   history: { file: ~/.bash_history }
+#   history: { ssh: user@host, path: ~/.bash_history }
+#
+# Only ports listed here are reachable via /term/{port}; everything else
+# returns 404. This is the access-control mechanism — keep the file tight.
+
+ports:
+  7681:
+    history: { file: ~/.bash_history }
+
+  7682:
+    history: { ssh: me@my-other-box, path: ~/.bash_history }

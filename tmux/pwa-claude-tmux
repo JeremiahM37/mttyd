@@ -1,0 +1,38 @@
+#!/bin/bash
+# Persistent tmux session wrapper for ttyd.
+#
+# Each ttyd connection re-attaches to the same tmux session (-A), so the
+# program inside survives disconnects, browser refreshes, and switching
+# devices. Tailored for `claude --dangerously-skip-permissions` by default
+# but works with any long-running CLI — set TMUX_CMD to override.
+#
+# Before attaching, dump the existing pane's full scrollback to stdout so
+# that xterm.js (which starts with an empty buffer on each page load) lands
+# with the conversation history visible. We exclude the visible area
+# (`-E -1`) to avoid duplication with tmux's own attach-time redraw.
+
+SESSION="${PHONETTY_SESSION:-claude}"
+TMUX_CMD="${PHONETTY_CMD:-claude --dangerously-skip-permissions}"
+
+# Start in $HOME so the embedded program sees a neutral CWD, not wherever
+# the supervisor (systemd, ttyd) happened to invoke us from.
+cd "$HOME" || cd /
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux capture-pane -p -t "$SESSION" -S -100000 -E -1 2>/dev/null
+fi
+
+# Wrap the inner command in a respawn loop so an accidental Ctrl-D or crash
+# doesn't kill the tmux session — the next page load reattaches cleanly.
+exec tmux new-session -A -s "$SESSION" -c "$HOME" -- \
+    bash -c '
+        while true; do
+            eval "$1"
+            status=$?
+            echo
+            echo "[phonetty] command exited (status=$status). Press any key to restart, Ctrl-C for a shell."
+            if read -t 5 -n 1; then continue; fi
+            echo "auto-restarting in 1s..."
+            sleep 1
+        done
+    ' -- "$TMUX_CMD"

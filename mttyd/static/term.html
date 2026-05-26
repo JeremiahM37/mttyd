@@ -7,100 +7,118 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>terminal __PORT__</title>
+  <title>mttyd</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
   <style>
-    /* overscroll-behavior + touch-action prevent the browser from treating
-       a drag-down as pull-to-refresh, which otherwise reloads the page the
-       moment the user tries to scroll. */
     html, body { margin: 0; padding: 0; height: 100%; background: #000;
-                  overscroll-behavior: none; touch-action: none;
-                  display: flex; flex-direction: column; color: #cbd5e1;
-                  font-family: ui-sans-serif, system-ui, sans-serif; }
-    #term { flex: 1; min-height: 0; position: relative; }
-    /* Top-right floating toolbar — search / copy / paste / settings. */
+                 overscroll-behavior: none; touch-action: none;
+                 display: flex; flex-direction: column; color: #cbd5e1;
+                 font-family: ui-sans-serif, system-ui, sans-serif; }
+    /* Tab bar — only shown when there's more than one port. */
+    #tabs { display: flex; height: 32px; background: #0b1020;
+            border-bottom: 1px solid #1e293b; overflow-x: auto;
+            overflow-y: hidden; flex-shrink: 0;
+            -webkit-overflow-scrolling: touch; }
+    #tabs.single { display: none; }
+    .tab { display: inline-flex; align-items: center; gap: 6px;
+           padding: 0 14px; height: 32px; background: transparent;
+           border: 0; border-right: 1px solid #1e293b;
+           color: #94a3b8; font: inherit; font-size: 13px;
+           white-space: nowrap; cursor: pointer;
+           touch-action: manipulation; }
+    .tab.active { background: #1e293b; color: #e2e8f0;
+                  box-shadow: inset 0 -2px 0 #6366f1; }
+    .tab .dot { width: 6px; height: 6px; border-radius: 50%;
+                background: transparent; display: inline-block; }
+    .tab .dot.unread { background: #f59e0b; }
+    /* Terminals container — fills remaining space, holds one wrap per port. */
+    #terms { flex: 1; min-height: 0; position: relative; }
+    .termWrap { position: absolute; inset: 0; display: flex;
+                flex-direction: column; }
+    .termWrap.hidden { display: none; }
+    .termInner { flex: 1; min-height: 0; position: relative; }
+    /* Shared top toolbar — positioned over the active term's top-right. */
     #toolbar { position: absolute; top: 4px; right: 4px; z-index: 5;
-                display: flex; gap: 4px; }
-    /* Hide toolbar while search is open so its buttons don't intercept
-       clicks on search next/prev/close. */
-    body:has(#searchbar.on) #toolbar { display: none; }
+               display: flex; gap: 4px; }
     .toolbtn { background: #1e293b; border: 1px solid #334155;
-                border-radius: 4px; color: #e2e8f0; height: 28px;
-                padding: 0 10px; font-size: 12px; font-weight: 500;
-                cursor: pointer; touch-action: manipulation;
-                font-family: inherit; }
+               border-radius: 4px; color: #e2e8f0; height: 28px;
+               padding: 0 10px; font-size: 12px; font-weight: 500;
+               cursor: pointer; touch-action: manipulation;
+               font-family: inherit; }
     .toolbtn.icon { width: 28px; padding: 0; font-size: 14px; }
-    .toolbtn:active { background: #1e293b; }
-    /* Search bar: hidden by default, slides in from top when toggled. */
+    /* Hide toolbar while search is open so its buttons don't intercept clicks. */
+    body:has(#searchbar.on) #toolbar { display: none; }
+    /* Search bar overlay. */
     #searchbar { display: none; position: absolute; top: 0; left: 0; right: 0;
-                  z-index: 4; background: rgba(15,23,42,0.95);
-                  border-bottom: 1px solid #1e293b; padding: 6px;
-                  align-items: center; gap: 6px; }
+                 z-index: 4; background: rgba(15,23,42,0.95);
+                 border-bottom: 1px solid #1e293b; padding: 6px;
+                 align-items: center; gap: 6px; }
     #searchbar.on { display: flex; }
     #searchInput { flex: 1; background: #1e293b; border: 1px solid #334155;
-                    color: #e2e8f0; border-radius: 4px; padding: 6px 8px;
-                    font-size: 14px; min-width: 0; }
+                   color: #e2e8f0; border-radius: 4px; padding: 6px 8px;
+                   font-size: 14px; min-width: 0; }
     #searchbar button { background: transparent; border: 0; color: #cbd5e1;
-                         font-size: 16px; padding: 6px 10px;
-                         touch-action: manipulation; }
+                        font-size: 16px; padding: 6px 10px;
+                        touch-action: manipulation; }
     #searchbar button:active { color: #818cf8; }
-    /* Optional snippets row above the keybar — one tap = whole command + Enter. */
+    /* Reconnect overlay — one per termWrap, hidden by default. */
+    .reconnect-overlay { display: none; position: absolute; inset: 0;
+                         z-index: 6; background: rgba(0,0,0,0.75);
+                         align-items: center; justify-content: center;
+                         flex-direction: column; gap: 10px; }
+    .reconnect-overlay.on { display: flex; }
+    .reconnect-overlay button { background: #6366f1; color: white; border: 0;
+                                padding: 12px 24px; border-radius: 6px;
+                                font-size: 15px; font-weight: 600; }
+    /* Snippets row (above keybar). */
     #snippetbar { display: none; height: 44px; background: #0b1020;
-                   border-top: 1px solid #1e293b; flex-shrink: 0;
-                   overflow-x: auto; overflow-y: hidden; white-space: nowrap;
-                   -webkit-overflow-scrolling: touch; }
+                  border-top: 1px solid #1e293b; flex-shrink: 0;
+                  overflow-x: auto; overflow-y: hidden; white-space: nowrap;
+                  -webkit-overflow-scrolling: touch; }
     #snippetbar.on { display: block; }
     .snipbtn { display: inline-block; height: 100%; padding: 0 14px;
-                background: transparent; border: 0; border-right: 1px solid #1e293b;
-                color: #cbd5e1; font-family: ui-monospace, Menlo, monospace;
-                font-size: 13px; touch-action: manipulation; user-select: none; }
+               background: transparent; border: 0; border-right: 1px solid #1e293b;
+               color: #cbd5e1; font-family: ui-monospace, Menlo, monospace;
+               font-size: 13px; touch-action: manipulation; user-select: none; }
     .snipbtn:active { background: #1e293b; color: #818cf8; }
-    /* Bottom key bar: arrows + Tab + Esc + Ctrl-C, with long-press for
-       secondary keys (Home/End/PgUp/PgDn/Shift-Tab/^D). */
+    /* Bottom key bar. */
     #keybar { display: flex; height: 44px; background: #0b1020;
-               border-top: 1px solid #1e293b; flex-shrink: 0;
-               padding-bottom: env(safe-area-inset-bottom, 0); }
+              border-top: 1px solid #1e293b; flex-shrink: 0;
+              padding-bottom: env(safe-area-inset-bottom, 0); }
     #keybar.off { display: none; }
     .keybtn { flex: 1; background: transparent; border: 0;
-               border-right: 1px solid #1e293b; color: #cbd5e1;
-               font-family: ui-monospace, Menlo, monospace; font-size: 16px;
-               touch-action: manipulation; user-select: none; }
+              border-right: 1px solid #1e293b; color: #cbd5e1;
+              font-family: ui-monospace, Menlo, monospace; font-size: 16px;
+              touch-action: manipulation; user-select: none; }
     .keybtn:last-child { border-right: 0; }
     .keybtn:active { background: #1e293b; color: #818cf8; }
-    .keybtn.long { color: #818cf8; }    /* flash on longpress */
-    /* Reconnect overlay shown when WS closes — gone by default. */
-    #reconnect { display: none; position: absolute; inset: 0; z-index: 6;
-                  background: rgba(0,0,0,0.75); align-items: center;
-                  justify-content: center; flex-direction: column; gap: 10px; }
-    #reconnect.on { display: flex; }
-    #reconnect button { background: #6366f1; color: white; border: 0;
-                         padding: 12px 24px; border-radius: 6px;
-                         font-size: 15px; font-weight: 600; }
-    /* Settings drawer — modal overlay. */
+    .keybtn.long { color: #818cf8; }
+    /* Settings drawer. */
     #settings { display: none; position: fixed; inset: 0; z-index: 10;
-                 background: rgba(0,0,0,0.7); align-items: center;
-                 justify-content: center; padding: 16px; }
+                background: rgba(0,0,0,0.7); align-items: center;
+                justify-content: center; padding: 16px; }
     #settings.on { display: flex; }
     #settings .panel { background: #0f172a; border: 1px solid #1e293b;
-                        border-radius: 8px; padding: 16px; max-width: 480px;
-                        width: 100%; max-height: 90vh; overflow-y: auto;
-                        font-size: 14px; }
+                       border-radius: 8px; padding: 16px; max-width: 480px;
+                       width: 100%; max-height: 90vh; overflow-y: auto;
+                       font-size: 14px; }
     #settings h2 { margin: 0 0 12px 0; font-size: 16px; }
     #settings label { display: flex; align-items: center; gap: 8px;
-                       margin: 8px 0; cursor: pointer; }
+                      margin: 8px 0; cursor: pointer; }
     #settings input[type=range] { flex: 1; }
     #settings textarea { width: 100%; box-sizing: border-box; background: #1e293b;
-                          color: #e2e8f0; border: 1px solid #334155;
-                          border-radius: 4px; padding: 6px;
-                          font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+                         color: #e2e8f0; border: 1px solid #334155;
+                         border-radius: 4px; padding: 6px;
+                         font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
     #settings details summary { cursor: pointer; padding: 6px 0; color: #94a3b8; }
     #settings .done { width: 100%; margin-top: 12px; background: #6366f1;
-                       color: white; border: 0; padding: 10px;
-                       border-radius: 6px; font-weight: 600; }
+                      color: white; border: 0; padding: 10px;
+                      border-radius: 6px; font-weight: 600; }
   </style>
 </head>
 <body>
-  <div id="term">
+  <div id="tabs"></div>
+  <div id="terms">
     <div id="toolbar">
       <button id="searchBtn"   class="toolbtn" aria-label="search">Find</button>
       <button id="copyBtn"     class="toolbtn" aria-label="copy">Copy</button>
@@ -114,20 +132,16 @@
       <button id="searchNext" aria-label="next">↓</button>
       <button id="searchClose" aria-label="close">✕</button>
     </div>
-    <div id="reconnect">
-      <div>connection closed</div>
-      <button id="reconnectBtn">reconnect</button>
-    </div>
   </div>
   <div id="snippetbar"></div>
   <div id="keybar">
-    <button class="keybtn" data-seq="\x1b[A" data-seq-long="\x1b[5~" data-label="↑" data-label-long="PgUp">↑</button>
-    <button class="keybtn" data-seq="\x1b[B" data-seq-long="\x1b[6~" data-label="↓" data-label-long="PgDn">↓</button>
-    <button class="keybtn" data-seq="\x1b[D" data-seq-long="\x1b[H" data-label="←" data-label-long="Home">←</button>
-    <button class="keybtn" data-seq="\x1b[C" data-seq-long="\x1b[F" data-label="→" data-label-long="End">→</button>
-    <button class="keybtn" data-seq="\t" data-seq-long="\x1b[Z" data-label="Tab" data-label-long="⇤Tab">Tab</button>
-    <button class="keybtn" data-seq="\x1b" data-label="Esc">Esc</button>
-    <button class="keybtn" data-seq="\x03" data-seq-long="\x04" data-label="^C" data-label-long="^D">^C</button>
+    <button class="keybtn" data-seq="\x1b[A" data-seq-long="\x1b[5~">↑</button>
+    <button class="keybtn" data-seq="\x1b[B" data-seq-long="\x1b[6~">↓</button>
+    <button class="keybtn" data-seq="\x1b[D" data-seq-long="\x1b[H">←</button>
+    <button class="keybtn" data-seq="\x1b[C" data-seq-long="\x1b[F">→</button>
+    <button class="keybtn" data-seq="\t"     data-seq-long="\x1b[Z">Tab</button>
+    <button class="keybtn" data-seq="\x1b">Esc</button>
+    <button class="keybtn" data-seq="\x03"   data-seq-long="\x04">^C</button>
   </div>
   <div id="settings">
     <div class="panel">
@@ -158,175 +172,18 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js"></script>
   <script>
-    const PORT = __PORT__;
-    const HOST = location.hostname;
+    // mttyd multi-tab wrapper.
+    //
+    // Server passes either a single port or an array of ports via __PORTS__.
+    // We create one xterm + WS per port, all eager (so background tabs keep
+    // receiving output). One shared toolbar / keybar / settings drawer
+    // operates on whichever tab is active.
 
-    // Same defaults ttyd's own page uses, except fontSize is sized for a
-    // real mobile viewport (1:1 pixel) rather than a 980px zoomed-out one.
-    const term = new window.Terminal({
-      fontSize: 12,
-      fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-      cursorBlink: true,
-      scrollback: 100000,
-      theme: { background: '#000000' },
-    });
-    const fit = new window.FitAddon.FitAddon();
-    term.loadAddon(fit);
-    const search = new window.SearchAddon.SearchAddon();
-    term.loadAddon(search);
-    term.open(document.getElementById('term'));
-    fit.fit();
+    const PORTS = __PORTS__;
+    const HOST  = location.hostname;
 
-    // Gboard predictive-text fix on the hidden helper textarea. Plain
-    // autocomplete="off" gets ignored by Android Gboard about half the
-    // time — these extra attributes (inputmode + Grammarly hint + setting
-    // again via MutationObserver) catch the cases where xterm.js or the
-    // OS resets them.
-    // Apply once: setting attributes from inside a MutationObserver that's
-    // also listening for attribute changes is an infinite-loop hazard, so
-    // only watch childList (xterm.js replacing the textarea) and skip
-    // setAttribute when the value is already correct.
-    const HELPER_ATTRS = {
-      autocomplete: 'off',
-      autocorrect: 'off',
-      autocapitalize: 'none',
-      spellcheck: 'false',
-      inputmode: 'url',
-      'data-gramm': 'false',
-      'data-gramm_editor': 'false',
-    };
-    function lockHelperAttrs() {
-      const helper = document.querySelector('.xterm-helper-textarea');
-      if (!helper) return;
-      for (const [k, v] of Object.entries(HELPER_ATTRS)) {
-        if (helper.getAttribute(k) !== v) helper.setAttribute(k, v);
-      }
-    }
-    lockHelperAttrs();
-    // Watch only for childList changes — if xterm.js ever replaces the
-    // helper element entirely we re-apply attrs on the new one.
-    new MutationObserver(lockHelperAttrs).observe(
-      document.body, {childList: true, subtree: true}
-    );
-
-    // ttyd 1.7.x WebSocket protocol — JSON_DATA opcode is '{' (literal '{').
-    const ws = new WebSocket('ws://' + HOST + ':' + PORT + '/ws', ['tty']);
-    ws.binaryType = 'arraybuffer';
-    const enc = new TextEncoder();
-    const dec = new TextDecoder('utf-8');
-
-    function send(prefix, payload) {
-      const body = enc.encode(payload);
-      const buf  = new Uint8Array(body.length + 1);
-      buf[0] = prefix.charCodeAt(0);
-      buf.set(body, 1);
-      ws.send(buf);
-    }
-
-    ws.onopen = () => {
-      send('{', JSON.stringify({AuthToken: "", columns: term.cols, rows: term.rows}));
-    };
-    ws.onmessage = (ev) => {
-      const buf  = new Uint8Array(ev.data);
-      const kind = String.fromCharCode(buf[0]);
-      if      (kind === '0') term.write(dec.decode(buf.slice(1)));
-      else if (kind === '1') document.title = dec.decode(buf.slice(1));
-    };
-    let reconnectAttempts = 0;
-    ws.onclose = () => {
-      term.writeln('\r\n[connection closed]\r\n');
-      if (settings.autoReconnect && reconnectAttempts < 3) {
-        setTimeout(() => location.reload(),
-                   1000 * Math.pow(2, reconnectAttempts++));    // 1s, 2s, 4s
-      } else {
-        document.getElementById('reconnect').classList.add('on');
-      }
-    };
-    document.getElementById('reconnectBtn').addEventListener('click', () => location.reload());
-
-    term.onData(d => { if (ws.readyState === WebSocket.OPEN) send('0', d); });
-
-    function doResize() {
-      fit.fit();
-      if (ws.readyState === WebSocket.OPEN) {
-        send('1', JSON.stringify({columns: term.cols, rows: term.rows}));
-      }
-    }
-    window.addEventListener('resize', doResize);
-    new ResizeObserver(doResize).observe(document.getElementById('term'));
-    if (document.fonts && document.fonts.ready) document.fonts.ready.then(doResize);
-
-    // Smooth scroll via Pointer Events + setPointerCapture. This is THE
-    // modern way to do reliable touch tracking on mobile:
-    //   - setPointerCapture redirects all pointermove events to our element
-    //     regardless of what's on top — no racing with xterm.js's handlers
-    //   - Pointer events don't get coalesced by the browser the way touch
-    //     events do, so individual move samples arrive consistently
-    //   - Anchored math (target = round((startY - y) / PX_PER_LINE)) means
-    //     each move recomputes "where finger is" — no event-loss drift
-    (function smoothTouchScroll() {
-      const termEl = document.getElementById('term');
-      const PX_PER_LINE = 7;       // smaller = faster scroll. 7 = slightly slower than 5.
-      const FRICTION   = 0.93;
-      const STOP_V     = 0.04;
-      let startY = null, prevY = 0, prevT = 0;
-      let scrolledLines = 0, velocity = 0, raf = null, activeId = -1;
-
-      function step() {
-        const now = performance.now();
-        const dt = now - prevT; prevT = now;
-        velocity *= Math.pow(FRICTION, dt / 16);
-        if (Math.abs(velocity) < STOP_V) { raf = null; return; }
-        const lines = Math.round(velocity * dt / PX_PER_LINE);
-        if (lines !== 0) term.scrollLines(lines);
-        raf = requestAnimationFrame(step);
-      }
-
-      termEl.addEventListener('pointerdown', e => {
-        if (e.pointerType !== 'touch') return;     // mouse falls through to xterm.js
-        if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
-        try { termEl.setPointerCapture(e.pointerId); } catch (_) {}
-        activeId = e.pointerId;
-        startY = e.clientY; prevY = startY;
-        prevT = performance.now();
-        scrolledLines = 0; velocity = 0;
-      });
-
-      termEl.addEventListener('pointermove', e => {
-        if (e.pointerId !== activeId || startY === null) return;
-        const y = e.clientY;
-        const t = performance.now();
-        const targetLines = Math.round((startY - y) / PX_PER_LINE);
-        const delta = targetLines - scrolledLines;
-        if (delta !== 0) {
-          term.scrollLines(delta);
-          scrolledLines = targetLines;
-        }
-        const dt = Math.max(t - prevT, 1);
-        velocity = (prevY - y) / dt;
-        prevY = y; prevT = t;
-        if (e.cancelable) e.preventDefault();
-      });
-
-      function endPointer(e) {
-        if (e.pointerId !== activeId) return;
-        activeId = -1;
-        startY = null;
-        try { termEl.releasePointerCapture(e.pointerId); } catch (_) {}
-        if (Math.abs(velocity) > STOP_V) {
-          prevT = performance.now();
-          raf = requestAnimationFrame(step);
-        }
-      }
-      termEl.addEventListener('pointerup', endPointer);
-      termEl.addEventListener('pointercancel', endPointer);
-    })();
-
-    // ── Settings ─────────────────────────────────────────────────────────
-    // Persisted in localStorage per-port. Drives keybar/snippet/longpress/
-    // auto-reconnect/font behaviour. Defaults are conservative; snippets
-    // default off because they need user input to be useful.
-    const SETTINGS_KEY = 'mttyd_settings_' + PORT;
+    // ── settings (shared across all tabs) ───────────────────────────────
+    const SETTINGS_KEY = 'mttyd_settings';
     const DEFAULTS = {
       fontSize: 12,
       theme: 'dark',
@@ -340,16 +197,16 @@
     const THEMES = {
       'dark':           { background: '#000000', foreground: '#cbd5e1', cursor: '#cbd5e1' },
       'light':          { background: '#ffffff', foreground: '#0f172a', cursor: '#0f172a',
-                           selectionBackground: '#94a3b8' },
+                          selectionBackground: '#94a3b8' },
       'solarized-dark': { background: '#002b36', foreground: '#839496', cursor: '#93a1a1',
-                           black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
-                           blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5' },
+                          black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+                          blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5' },
       'dracula':        { background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2',
-                           black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
-                           blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2' },
+                          black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
+                          blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2' },
       'nord':           { background: '#2e3440', foreground: '#d8dee9', cursor: '#d8dee9',
-                           black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
-                           blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0' },
+                          black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
+                          blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0' },
     };
     function loadSettings() {
       try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); }
@@ -358,32 +215,30 @@
     function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
     let settings = loadSettings();
 
-    function parseSnippets(text) {
-      return text.split('\n').map(line => {
-        line = line.trim();
-        if (!line) return null;
-        const i = line.indexOf('|');
-        return i >= 0 ? {label: line.slice(0,i).trim(), cmd: line.slice(i+1).trim()}
-                      : {label: line.slice(0, 12), cmd: line};
-      }).filter(Boolean);
+    // HTML attrs hold control sequences as readable text like "\x1b[A"
+    // (the browser doesn't parse JS-style escapes from attributes).
+    // decodeSeq converts those back into actual bytes before sending.
+    function decodeSeq(s) {
+      return (s || '')
+        .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\n/g, '\n');
     }
 
-    function renderSnippets() {
-      const bar = document.getElementById('snippetbar');
-      const items = parseSnippets(settings.snippetsText);
-      bar.innerHTML = items.map(s =>
-        `<button class="snipbtn" data-cmd="${s.cmd.replace(/"/g,'&quot;')}">${s.label}</button>`
-      ).join('');
-      bar.classList.toggle('on', settings.snippets && items.length > 0);
-      bar.querySelectorAll('.snipbtn').forEach(b => {
-        b.addEventListener('click', () => {
-          if (ws.readyState === WebSocket.OPEN) send('0', b.dataset.cmd + '\r');
-        });
+    // Gboard predictive-text fix on every xterm helper textarea.
+    const HELPER_ATTRS = {
+      autocomplete: 'off', autocorrect: 'off', autocapitalize: 'none',
+      spellcheck: 'false', inputmode: 'url',
+      'data-gramm': 'false', 'data-gramm_editor': 'false',
+    };
+    function lockHelperAttrs() {
+      document.querySelectorAll('.xterm-helper-textarea').forEach(h => {
+        for (const [k, v] of Object.entries(HELPER_ATTRS)) {
+          if (h.getAttribute(k) !== v) h.setAttribute(k, v);
+        }
       });
     }
 
-    // Wake Lock — keep the screen from auto-sleeping while term is open.
-    // Released automatically when the tab is hidden; re-acquired on visible.
+    // Wake Lock — released when tab is hidden, re-acquired when visible.
     let wakeLock = null;
     async function acquireWakeLock() {
       if (!settings.wakeLock || !navigator.wakeLock || wakeLock) return;
@@ -397,19 +252,256 @@
       else releaseWakeLock();
     });
 
+    // ttyd WebSocket helper. JSON_DATA opcode is '{' (literal '{'); sending
+    // '2' would be PAUSE and the inner command never spawns.
+    const enc = new TextEncoder();
+    const dec = new TextDecoder('utf-8');
+    function sendWs(ws, prefix, payload) {
+      const body = enc.encode(payload);
+      const buf  = new Uint8Array(body.length + 1);
+      buf[0] = prefix.charCodeAt(0);
+      buf.set(body, 1);
+      ws.send(buf);
+    }
+
+    // ── per-port session ────────────────────────────────────────────────
+    const sessions = [];
+    let activeIdx = 0;
+
+    function createSession(port, idx) {
+      const wrap = document.createElement('div');
+      wrap.className = 'termWrap' + (idx === 0 ? '' : ' hidden');
+      wrap.dataset.port = port;
+
+      const inner = document.createElement('div');
+      inner.className = 'termInner';
+      wrap.appendChild(inner);
+
+      const overlay = document.createElement('div');
+      overlay.className = 'reconnect-overlay';
+      overlay.innerHTML = '<div>connection closed</div><button class="reconBtn">reconnect</button>';
+      overlay.querySelector('.reconBtn').addEventListener('click', () => location.reload());
+      wrap.appendChild(overlay);
+
+      document.getElementById('terms').appendChild(wrap);
+
+      const term   = new window.Terminal({
+        fontSize: settings.fontSize,
+        fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        cursorBlink: true, scrollback: 100000,
+        theme: THEMES[settings.theme] || THEMES.dark,
+      });
+      const fit    = new window.FitAddon.FitAddon();
+      const search = new window.SearchAddon.SearchAddon();
+      term.loadAddon(fit); term.loadAddon(search);
+      term.open(inner); fit.fit();
+
+      const ws = new WebSocket('ws://' + HOST + ':' + port + '/ws', ['tty']);
+      ws.binaryType = 'arraybuffer';
+
+      const session = { port, idx, term, fit, search, ws, wrap, inner,
+                        overlay, reconnectAttempts: 0, hasUnread: false };
+
+      ws.onopen = () => sendWs(ws, '{',
+        JSON.stringify({ AuthToken: "", columns: term.cols, rows: term.rows }));
+
+      ws.onmessage = (ev) => {
+        const buf  = new Uint8Array(ev.data);
+        const kind = String.fromCharCode(buf[0]);
+        if (kind === '0') {
+          term.write(dec.decode(buf.slice(1)));
+          // Mark unread dot on background tabs.
+          if (idx !== activeIdx && !session.hasUnread) {
+            session.hasUnread = true;
+            const dot = document.querySelector(`.tab[data-idx="${idx}"] .dot`);
+            if (dot) dot.classList.add('unread');
+          }
+        } else if (kind === '1') {
+          if (idx === activeIdx) document.title = dec.decode(buf.slice(1));
+        }
+      };
+      ws.onclose = () => {
+        term.writeln('\r\n[connection closed]\r\n');
+        if (settings.autoReconnect && session.reconnectAttempts < 3) {
+          setTimeout(() => location.reload(), 1000 * Math.pow(2, session.reconnectAttempts++));
+        } else {
+          overlay.classList.add('on');
+        }
+      };
+      term.onData(d => { if (ws.readyState === WebSocket.OPEN) sendWs(ws, '0', d); });
+
+      function doResize() {
+        if (wrap.classList.contains('hidden')) return;   // skip background tabs
+        fit.fit();
+        if (ws.readyState === WebSocket.OPEN) {
+          sendWs(ws, '1', JSON.stringify({ columns: term.cols, rows: term.rows }));
+        }
+      }
+      session.resize = doResize;
+      window.addEventListener('resize', doResize);
+      new ResizeObserver(doResize).observe(inner);
+      if (document.fonts && document.fonts.ready) document.fonts.ready.then(doResize);
+
+      // Smooth pointer-event scroll, per-term.
+      (function smoothScroll() {
+        const PX_PER_LINE = 7, FRICTION = 0.93, STOP_V = 0.04;
+        let startY = null, prevY = 0, prevT = 0;
+        let scrolledLines = 0, velocity = 0, raf = null, activePtr = -1;
+        function step() {
+          const now = performance.now();
+          const dt = now - prevT; prevT = now;
+          velocity *= Math.pow(FRICTION, dt / 16);
+          if (Math.abs(velocity) < STOP_V) { raf = null; return; }
+          const lines = Math.round(velocity * dt / PX_PER_LINE);
+          if (lines !== 0) term.scrollLines(lines);
+          raf = requestAnimationFrame(step);
+        }
+        inner.addEventListener('pointerdown', e => {
+          if (e.pointerType !== 'touch') return;
+          if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
+          try { inner.setPointerCapture(e.pointerId); } catch (_) {}
+          activePtr = e.pointerId;
+          startY = e.clientY; prevY = startY;
+          prevT = performance.now();
+          scrolledLines = 0; velocity = 0;
+        });
+        inner.addEventListener('pointermove', e => {
+          if (e.pointerId !== activePtr || startY === null) return;
+          const y = e.clientY, t = performance.now();
+          const targetLines = Math.round((startY - y) / PX_PER_LINE);
+          const delta = targetLines - scrolledLines;
+          if (delta !== 0) { term.scrollLines(delta); scrolledLines = targetLines; }
+          velocity = (prevY - y) / Math.max(t - prevT, 1);
+          prevY = y; prevT = t;
+          if (e.cancelable) e.preventDefault();
+        });
+        function endPtr(e) {
+          if (e.pointerId !== activePtr) return;
+          activePtr = -1; startY = null;
+          try { inner.releasePointerCapture(e.pointerId); } catch (_) {}
+          if (Math.abs(velocity) > STOP_V) {
+            prevT = performance.now();
+            raf = requestAnimationFrame(step);
+          }
+        }
+        inner.addEventListener('pointerup', endPtr);
+        inner.addEventListener('pointercancel', endPtr);
+      })();
+
+      return session;
+    }
+
+    PORTS.forEach((port, idx) => sessions.push(createSession(port, idx)));
+    lockHelperAttrs();
+    new MutationObserver(lockHelperAttrs).observe(document.body, { childList: true, subtree: true });
+
+    // ── tab bar ────────────────────────────────────────────────────────
+    const tabsEl = document.getElementById('tabs');
+    if (PORTS.length === 1) tabsEl.classList.add('single');
+    PORTS.forEach((port, idx) => {
+      const t = document.createElement('button');
+      t.className = 'tab' + (idx === 0 ? ' active' : '');
+      t.dataset.idx = idx;
+      t.innerHTML = `<span>${port}</span><span class="dot"></span>`;
+      t.addEventListener('click', () => setActive(idx));
+      tabsEl.appendChild(t);
+    });
+
+    function active() { return sessions[activeIdx]; }
+    function setActive(idx) {
+      if (idx < 0 || idx >= sessions.length) return;
+      sessions.forEach((s, i) => {
+        s.wrap.classList.toggle('hidden', i !== idx);
+        const tab = tabsEl.children[i];
+        tab.classList.toggle('active', i === idx);
+        if (i === idx) {
+          s.hasUnread = false;
+          tab.querySelector('.dot').classList.remove('unread');
+          s.term.focus();
+        }
+      });
+      activeIdx = idx;
+      requestAnimationFrame(() => active().resize());
+      location.hash = '#' + PORTS[idx];
+    }
+
+    // Honor URL hash (#7691) to start on a specific tab.
+    const hashPort = parseInt(location.hash.replace('#', ''), 10);
+    if (!isNaN(hashPort)) {
+      const i = PORTS.indexOf(hashPort);
+      if (i >= 0) setActive(i);
+    }
+
+    // ── shared keybar with long-press ──────────────────────────────────
+    const LONGPRESS_MS = 500;
+    document.querySelectorAll('.keybtn').forEach(btn => {
+      let timer = null, fired = false;
+      function clearT() { if (timer) { clearTimeout(timer); timer = null; } }
+      btn.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        fired = false;
+        const longSeq = decodeSeq(btn.dataset.seqLong);
+        if (settings.longpress && longSeq) {
+          timer = setTimeout(() => {
+            fired = true;
+            const s = active();
+            if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', longSeq);
+            btn.classList.add('long');
+            if (navigator.vibrate) navigator.vibrate(20);
+            setTimeout(() => btn.classList.remove('long'), 150);
+          }, LONGPRESS_MS);
+        }
+      });
+      btn.addEventListener('pointerup', () => {
+        clearT();
+        if (!fired) {
+          const s = active();
+          if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', decodeSeq(btn.dataset.seq));
+        }
+      });
+      btn.addEventListener('pointerleave', clearT);
+      btn.addEventListener('pointercancel', clearT);
+    });
+
+    // ── settings + snippets ─────────────────────────────────────────────
+    function parseSnippets(text) {
+      return text.split('\n').map(line => {
+        line = line.trim();
+        if (!line) return null;
+        const i = line.indexOf('|');
+        return i >= 0
+          ? { label: line.slice(0, i).trim(), cmd: line.slice(i + 1).trim() }
+          : { label: line.slice(0, 12), cmd: line };
+      }).filter(Boolean);
+    }
+    function renderSnippets() {
+      const bar = document.getElementById('snippetbar');
+      const items = parseSnippets(settings.snippetsText);
+      bar.innerHTML = items.map(s =>
+        `<button class="snipbtn" data-cmd="${s.cmd.replace(/"/g, '&quot;')}">${s.label}</button>`
+      ).join('');
+      bar.classList.toggle('on', settings.snippets && items.length > 0);
+      bar.querySelectorAll('.snipbtn').forEach(b => {
+        b.addEventListener('click', () => {
+          const s = active();
+          if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', b.dataset.cmd + '\r');
+        });
+      });
+    }
     function applySettings() {
-      term.options.fontSize = settings.fontSize;
-      term.options.theme    = THEMES[settings.theme] || THEMES.dark;
+      sessions.forEach(s => {
+        s.term.options.fontSize = settings.fontSize;
+        s.term.options.theme    = THEMES[settings.theme] || THEMES.dark;
+      });
       document.getElementById('keybar').classList.toggle('off', !settings.keybar);
       renderSnippets();
       if (settings.wakeLock) acquireWakeLock(); else releaseWakeLock();
-      doResize();    // fontSize change needs a refit
+      sessions.forEach(s => s.resize());
     }
     applySettings();
 
-    // Settings drawer wiring.
     const drawer = document.getElementById('settings');
-    function syncSettingsForm() {
+    function syncForm() {
       document.getElementById('setFont').value = settings.fontSize;
       document.getElementById('setTheme').value = settings.theme;
       document.getElementById('setKeybar').checked = settings.keybar;
@@ -420,7 +512,7 @@
       document.getElementById('setSnippetsText').value = settings.snippetsText;
     }
     document.getElementById('settingsBtn').addEventListener('click', () => {
-      syncSettingsForm();
+      syncForm();
       drawer.classList.add('on');
     });
     document.getElementById('settingsDone').addEventListener('click', () => {
@@ -436,64 +528,19 @@
       applySettings();
       drawer.classList.remove('on');
     });
-    drawer.addEventListener('click', e => {
-      if (e.target === drawer) drawer.classList.remove('on');   // tap backdrop closes
-    });
+    drawer.addEventListener('click', e => { if (e.target === drawer) drawer.classList.remove('on'); });
 
-    // ── Key bar with long-press support ──────────────────────────────────
-    // Pointer-based for reliable long-press detection. Short press fires
-    // data-seq on pointerup; long press (≥500ms) fires data-seq-long while
-    // still held, with a haptic vibration if the device supports it.
-    //
-    // HTML attributes hold control sequences as readable text like
-    // "[A" / "" / "	". The browser reads those as 6/4/2 literal
-    // chars (HTML attrs don't interpret escapes), so we have to decode
-    // them into actual bytes before sending — otherwise the keybar just
-    // types junk into the prompt instead of triggering Up arrow / Ctrl-C.
-    function decodeSeq(s) {
-      return (s || '')
-        .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-        .replace(/\\t/g, '\t')
-        .replace(/\\r/g, '\r')
-        .replace(/\\n/g, '\n');
-    }
-
-    const LONGPRESS_MS = 500;
-    document.querySelectorAll('.keybtn').forEach(btn => {
-      let timer = null, fired = false;
-      function clear() { if (timer) { clearTimeout(timer); timer = null; } }
-      btn.addEventListener('pointerdown', e => {
-        e.preventDefault();
-        fired = false;
-        const longSeq = decodeSeq(btn.dataset.seqLong);
-        if (settings.longpress && longSeq) {
-          timer = setTimeout(() => {
-            fired = true;
-            if (ws.readyState === WebSocket.OPEN) send('0', longSeq);
-            btn.classList.add('long');
-            if (navigator.vibrate) navigator.vibrate(20);
-            setTimeout(() => btn.classList.remove('long'), 150);
-          }, LONGPRESS_MS);
-        }
-      });
-      btn.addEventListener('pointerup', () => {
-        clear();
-        if (!fired && ws.readyState === WebSocket.OPEN) send('0', decodeSeq(btn.dataset.seq));
-      });
-      btn.addEventListener('pointerleave', clear);
-      btn.addEventListener('pointercancel', clear);
-    });
-
-    // ── Search through scrollback ───────────────────────────────────────
+    // ── search bar (operates on active tab) ─────────────────────────────
     const searchbar = document.getElementById('searchbar');
     const searchInput = document.getElementById('searchInput');
     function doSearch(dir) {
       const q = searchInput.value;
       if (!q) return;
       const opts = { decorations: { matchBackground: '#6366f1',
-                                       activeMatchBackground: '#a855f7' } };
-      if (dir === 'next') search.findNext(q, opts);
-      else                search.findPrevious(q, opts);
+                                    activeMatchBackground: '#a855f7' } };
+      const sr = active().search;
+      if (dir === 'next') sr.findNext(q, opts);
+      else                sr.findPrevious(q, opts);
     }
     document.getElementById('searchBtn').addEventListener('click', () => {
       searchbar.classList.add('on');
@@ -503,27 +550,25 @@
     document.getElementById('searchPrev').addEventListener('click', () => doSearch('prev'));
     document.getElementById('searchClose').addEventListener('click', () => {
       searchbar.classList.remove('on');
-      search.clearDecorations();
+      sessions.forEach(s => s.search.clearDecorations());
     });
     searchInput.addEventListener('keydown', e => {
       if (e.key === 'Enter')  { e.preventDefault(); doSearch(e.shiftKey ? 'prev' : 'next'); }
-      if (e.key === 'Escape') { e.preventDefault(); searchbar.classList.remove('on'); search.clearDecorations(); }
+      if (e.key === 'Escape') { e.preventDefault(); searchbar.classList.remove('on'); }
     });
 
-    // ── Copy / Paste ────────────────────────────────────────────────────
-    // Copy: prefer the user's selection (works on desktop or after tap-and-
-    // -hold to select on mobile); fall back to nothing rather than copying
-    // accidental content.
+    // ── copy/paste (active tab) ─────────────────────────────────────────
     document.getElementById('copyBtn').addEventListener('click', async () => {
-      const sel = term.getSelection();
+      const sel = active().term.getSelection();
       if (!sel) return;
       try { await navigator.clipboard.writeText(sel); } catch (_) {}
     });
-    // Paste: read clipboard, send to ttyd as if typed.
     document.getElementById('pasteBtn').addEventListener('click', async () => {
       try {
         const text = await navigator.clipboard.readText();
-        if (text && ws.readyState === WebSocket.OPEN) send('0', text);
+        if (!text) return;
+        const s = active();
+        if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', text);
       } catch (_) {}
     });
   </script>

@@ -64,6 +64,26 @@ SearchAddon load from a CDN, the WebSocket connects directly to ttyd at
 `ws://host:7681/ws`, and mttyd only ever serves the wrapper page and the
 optional bash-history endpoint.
 
+## Multi-tab (one page, multiple terminals)
+
+If you have several ttyd ports — say one per machine — point the URL at a
+comma-separated list:
+
+```
+http://your-server:8080/term/7681,7691,7692
+```
+
+You get a tab bar across the top, one tab per port. Each tab is its own
+live xterm + WebSocket, so background tabs keep receiving output and a
+small `•` dot lights up on their tab button when there's new content.
+Tap a tab to switch; the active port is reflected in the URL hash
+(`#7691`) so the tab survives a reload and is bookmarkable.
+
+- Single-port URL (`/term/7681`) still works — the tab bar just hides.
+- Each port must be in your `mttyd.yaml` (or any port if config-less).
+- Settings (font, theme, key bar, snippets, etc.) are shared across all
+  tabs in the page.
+
 ## Configuration
 
 Each port entry in `mttyd.yaml` declares one of:

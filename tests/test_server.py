@@ -27,11 +27,40 @@ def test_term_page_serves_html_with_xterm_and_keyboard_fix(app_with_history):
     assert r.status_code == 200
     body = r.text
     assert "@xterm/xterm" in body                  # xterm.js loaded
-    assert "const PORT = 7681" in body             # template substitution
-    assert "send('{'" in body                      # correct ttyd auth opcode
+    assert "const PORTS = [7681]" in body          # template substitution (multi-tab array form)
+    assert "sendWs(ws, '{'" in body                # correct ttyd auth opcode
     assert "xterm-helper-textarea" in body         # Gboard duplicate-word fix
     assert "autocorrect: 'off'" in body            # ...same fix (in HELPER_ATTRS dict)
     assert "MutationObserver" in body              # observer keeps Gboard attrs locked
+
+
+def test_term_page_supports_multi_tab(app_with_history):
+    # /term/7681,7691,7692 — comma-separated list = one tab per port,
+    # all live concurrently in one page.
+    client = TestClient(app_with_history)
+    # Need a config that includes all three ports for this test
+    import textwrap
+    from pathlib import Path
+    from mttyd.server import create_app
+    multi = create_app(None)   # config-less mode allows any port
+    client = TestClient(multi)
+    r = client.get("/term/7681,7691,7692")
+    assert r.status_code == 200
+    body = r.text
+    assert "const PORTS = [7681, 7691, 7692]" in body
+    assert 'id="tabs"' in body                     # tab bar element present
+    assert "createSession" in body                 # per-port session factory
+    assert "setActive" in body                     # tab switching
+    # single-port URL still works
+    assert client.get("/term/7681").status_code == 200
+    # invalid port rejected
+    assert client.get("/term/not-a-port").status_code == 400
+
+
+def test_term_page_rejects_unknown_port_in_multi_list(app_with_history):
+    client = TestClient(app_with_history)
+    # 7681 is in the test config; 9999 isn't.
+    assert client.get("/term/7681,9999").status_code == 404
 
 
 def test_term_page_has_smooth_pointer_scroll(app_with_history):
@@ -106,8 +135,8 @@ def test_term_page_has_settings_drawer(app_with_history):
     for fid in ("setFont", "setTheme", "setKeybar", "setLongpress",
                 "setAutoReconnect", "setWakeLock", "setSnippets", "setSnippetsText"):
         assert f'id="{fid}"' in body, f"missing settings field {fid}"
-    # Settings persist per-port in localStorage
-    assert "mttyd_settings_" in body
+    # Settings persist to localStorage (now shared across tabs, not per-port).
+    assert "mttyd_settings" in body
 
 
 def test_term_page_has_five_themes(app_with_history):
@@ -167,8 +196,8 @@ def test_term_page_has_wake_lock(app_with_history):
 def test_term_page_has_reconnect_overlay(app_with_history):
     client = TestClient(app_with_history)
     body = client.get("/term/7681").text
-    assert 'id="reconnect"' in body
-    assert 'id="reconnectBtn"' in body
+    # One reconnect overlay per tab (class, not id, since multi-tab)
+    assert "reconnect-overlay" in body
     # Auto-reconnect with exponential backoff up to 3 attempts
     assert "reconnectAttempts" in body
     assert "Math.pow(2," in body

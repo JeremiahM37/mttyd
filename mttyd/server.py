@@ -1,7 +1,9 @@
 """mttyd HTTP server.
 
 Serves two things:
-  GET /term/{port}            HTML wrapper that connects xterm.js to ttyd at PORT
+  GET /term/{ports}           HTML wrapper that connects xterm.js to ttyd. Ports
+                              may be a single integer ("7681") OR a comma-
+                              separated list ("7681,7691,7692") for multi-tab.
   GET /api/term/history?port  Ranked bash_history suggestions for the command bar
 
 Configuration is a YAML file with a `ports` map:
@@ -14,6 +16,7 @@ Configuration is a YAML file with a `ports` map:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -43,11 +46,26 @@ def create_app(config_path: str | None = None) -> FastAPI:
     ports = load_config(config_path)
     cache: dict[int, tuple[float, list[str]]] = {}
 
-    @app.get("/term/{port}")
-    async def term_page(port: int) -> HTMLResponse:
-        if ports and port not in ports:
-            raise HTTPException(404, "port not in config")
-        return HTMLResponse(TEMPLATE.replace("__PORT__", str(port)))
+    @app.get("/term/{ports_spec}")
+    async def term_page(ports_spec: str) -> HTMLResponse:
+        """One tab per port. `ports_spec` is either '7681' or '7681,7691,7692'."""
+        port_list: list[int] = []
+        for raw in ports_spec.split(","):
+            raw = raw.strip()
+            if not raw.isdigit():
+                raise HTTPException(400, f"invalid port: {raw!r}")
+            port = int(raw)
+            if ports and port not in ports:
+                raise HTTPException(404, f"port {port} not in config")
+            port_list.append(port)
+        if not port_list:
+            raise HTTPException(400, "no ports given")
+        html = TEMPLATE.replace("__PORTS__", json.dumps(port_list))
+        # Backward-compat: single-port pages historically also substituted
+        # __PORT__. Leaving that supported costs nothing and helps anyone
+        # who's edited the template for a single-port setup.
+        html = html.replace("__PORT__", str(port_list[0]))
+        return HTMLResponse(html)
 
     @app.get("/api/term/history")
     async def term_history(port: int) -> dict:

@@ -84,6 +84,50 @@ Tap a tab to switch; the active port is reflected in the URL hash
 - Settings (font, theme, key bar, snippets, etc.) are shared across all
   tabs in the page.
 
+## Parallel sessions on one port (the "multiple claudes" mode)
+
+If the ttyd port runs a wrapper like `pwa-claude-tmux` that attaches to a
+named tmux session, mttyd's `+` button lets you spawn extra parallel
+sessions and switch between them — useful for running, say, three Claude
+conversations on different projects at the same time.
+
+### Setup
+
+**1. Make your wrapper script take the session name as `$1`.** Example
+`pwa-claude-tmux` (the one shipped in `tmux/pwa-claude-tmux`):
+
+```bash
+#!/bin/bash
+SESSION="${1:-${SESSION:-claude}}"           # first arg wins, default "claude"
+SESSION=$(echo "$SESSION" | tr -cd 'a-zA-Z0-9_-')   # sanitize
+[ -z "$SESSION" ] && SESSION=claude
+# ... attach tmux session named $SESSION ...
+```
+
+**2. Start ttyd with `--url-arg`** so the page can pass a session name as
+a query string:
+
+```bash
+ttyd --port 7691 --writable --url-arg /path/to/pwa-claude-tmux
+```
+
+That's it. Now:
+
+- `/term/7691` opens with one tab connected to the default session (`claude`).
+- The `+` button in the tab bar spawns a new tab connecting to
+  `ws://host:7691/ws?arg=claude-2`. ttyd passes `claude-2` to the wrapper,
+  which attaches to (or creates) a tmux session by that name.
+- The `×` on each extra tab calls `POST /api/term/kill?session=NAME` —
+  mttyd runs `tmux kill-session -t NAME` so closed claudes don't pile up.
+  Reserved session names (`claude`, `main`, `default`) are refused so you
+  can't accidentally kill your primary.
+- Extra tabs persist in localStorage per-port — next visit restores them.
+
+Security: `--url-arg` lets any client pass arbitrary command-line args to
+the inner program. Only enable it on ttyd entries whose command is a
+wrapper script that sanitizes its args (the shipped `pwa-claude-tmux`
+does this). Don't put `--url-arg` on a raw `ssh` or `bash` invocation.
+
 ## Configuration
 
 Each port entry in `mttyd.yaml` declares one of:

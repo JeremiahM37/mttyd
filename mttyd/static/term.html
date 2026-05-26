@@ -31,6 +31,13 @@
     .tab .dot { width: 6px; height: 6px; border-radius: 50%;
                 background: transparent; display: inline-block; }
     .tab .dot.unread { background: #f59e0b; }
+    .tab .tabClose { color: #64748b; font-size: 16px; padding: 0 2px;
+                     margin-left: 2px; border-radius: 3px;
+                     line-height: 1; touch-action: manipulation; }
+    .tab .tabClose:active { background: #334155; color: #f87171; }
+    .tab.tabAdd { color: #818cf8; font-size: 18px; min-width: 36px;
+                  justify-content: center; padding: 0; font-weight: 600; }
+    .tab.tabAdd:active { background: #1e293b; }
     /* Terminals container — fills remaining space, holds one wrap per port. */
     #terms { flex: 1; min-height: 0; position: relative; }
     .termWrap { position: absolute; inset: 0; display: flex;
@@ -268,10 +275,11 @@
     const sessions = [];
     let activeIdx = 0;
 
-    function createSession(port, idx) {
+    function createSession(port, sessionArg, sessionIdx) {
       const wrap = document.createElement('div');
-      wrap.className = 'termWrap' + (idx === 0 ? '' : ' hidden');
+      wrap.className = 'termWrap hidden';
       wrap.dataset.port = port;
+      if (sessionArg) wrap.dataset.sessionArg = sessionArg;
 
       const inner = document.createElement('div');
       inner.className = 'termInner';
@@ -296,10 +304,15 @@
       term.loadAddon(fit); term.loadAddon(search);
       term.open(inner); fit.fit();
 
-      const ws = new WebSocket('ws://' + HOST + ':' + port + '/ws', ['tty']);
+      // Optional `?arg=NAME` passes a session name through ttyd's --url-arg
+      // flag to the pwa-claude-tmux wrapper, giving each tab an independent
+      // tmux session (claude / claude-2 / claude-3 / etc.).
+      const wsUrl = 'ws://' + HOST + ':' + port + '/ws'
+                  + (sessionArg ? '?arg=' + encodeURIComponent(sessionArg) : '');
+      const ws = new WebSocket(wsUrl, ['tty']);
       ws.binaryType = 'arraybuffer';
 
-      const session = { port, idx, term, fit, search, ws, wrap, inner,
+      const session = { port, sessionArg, term, fit, search, ws, wrap, inner,
                         overlay, reconnectAttempts: 0, hasUnread: false };
 
       ws.onopen = () => sendWs(ws, '{',
@@ -311,13 +324,16 @@
         if (kind === '0') {
           term.write(dec.decode(buf.slice(1)));
           // Mark unread dot on background tabs.
-          if (idx !== activeIdx && !session.hasUnread) {
+          const myIdx = sessions.indexOf(session);
+          if (myIdx !== activeIdx && !session.hasUnread) {
             session.hasUnread = true;
-            const dot = document.querySelector(`.tab[data-idx="${idx}"] .dot`);
+            const dot = tabsEl.querySelector(`.tab[data-idx="${myIdx}"] .dot`);
             if (dot) dot.classList.add('unread');
           }
         } else if (kind === '1') {
-          if (idx === activeIdx) document.title = dec.decode(buf.slice(1));
+          if (sessions.indexOf(session) === activeIdx) {
+            document.title = dec.decode(buf.slice(1));
+          }
         }
       };
       ws.onclose = () => {
@@ -391,44 +407,148 @@
       return session;
     }
 
-    PORTS.forEach((port, idx) => sessions.push(createSession(port, idx)));
-    lockHelperAttrs();
-    new MutationObserver(lockHelperAttrs).observe(document.body, { childList: true, subtree: true });
-
-    // ── tab bar ────────────────────────────────────────────────────────
+    // ── tab management ─────────────────────────────────────────────────
+    // Each tab is one xterm + WS pair. The tabs array drives everything;
+    // tab buttons are rendered from it on every change. Extra (non-primary)
+    // tabs are saved to localStorage so they restore on reload.
+    //
+    // A "primary" tab is one that came from the URL's port list — they
+    // can't be closed (the URL says they should be there). Extra tabs are
+    // user-added via the "+" button; they CAN be killed.
+    //
+    // Multi-port URLs (e.g. /term/7681,7691) still work and produce one
+    // primary tab per port; the "+" button only appears for single-port
+    // URLs (the multiple-claudes-per-machine use case).
     const tabsEl = document.getElementById('tabs');
-    if (PORTS.length === 1) tabsEl.classList.add('single');
-    PORTS.forEach((port, idx) => {
-      const t = document.createElement('button');
-      t.className = 'tab' + (idx === 0 ? ' active' : '');
-      t.dataset.idx = idx;
-      t.innerHTML = `<span>${port}</span><span class="dot"></span>`;
-      t.addEventListener('click', () => setActive(idx));
-      tabsEl.appendChild(t);
-    });
+    const SINGLE_PORT = PORTS.length === 1;
+    const EXTRA_KEY = 'mttyd_extra_tabs_' + PORTS.join('_');
+
+    function loadExtraTabs() {
+      try { return JSON.parse(localStorage.getItem(EXTRA_KEY) || '[]'); }
+      catch (_) { return []; }
+    }
+    function saveExtraTabs(extras) {
+      localStorage.setItem(EXTRA_KEY, JSON.stringify(extras));
+    }
+
+    function generateSessionName(port) {
+      // Try claude-2, claude-3, ... and pick the first one not already a tab.
+      const used = new Set(sessions
+        .filter(s => s.port === port && s.sessionArg)
+        .map(s => s.sessionArg));
+      for (let i = 2; i < 1000; i++) {
+        const name = 'claude-' + i;
+        if (!used.has(name)) return name;
+      }
+      return 'claude-' + Date.now();
+    }
 
     function active() { return sessions[activeIdx]; }
+
+    function renderTabBar() {
+      tabsEl.innerHTML = '';
+      sessions.forEach((s, i) => {
+        const t = document.createElement('button');
+        t.className = 'tab' + (i === activeIdx ? ' active' : '');
+        t.dataset.idx = i;
+        const label = s.sessionArg || (SINGLE_PORT ? 'claude' : String(s.port));
+        const closable = !!s.sessionArg;   // only extra (session-arg) tabs can close
+        t.innerHTML =
+          `<span>${label}</span>` +
+          `<span class="dot${s.hasUnread ? ' unread' : ''}"></span>` +
+          (closable ? `<span class="tabClose" title="close">×</span>` : '');
+        t.addEventListener('click', e => {
+          if (e.target.classList.contains('tabClose')) {
+            e.stopPropagation();
+            closeSessionTab(i);
+          } else {
+            setActive(i);
+          }
+        });
+        tabsEl.appendChild(t);
+      });
+      // "+" only when single-port URL — multi-port mode means tabs-as-machines,
+      // not tabs-as-sessions, so adding a session-arg tab there is ambiguous.
+      if (SINGLE_PORT) {
+        const plus = document.createElement('button');
+        plus.className = 'tab tabAdd';
+        plus.id = 'tabAdd';
+        plus.title = 'new session';
+        plus.textContent = '+';
+        plus.addEventListener('click', () => addSessionTab());
+        tabsEl.appendChild(plus);
+      }
+      // Visible only when there's something to switch between (>=2 tabs)
+      // or the "+" button is available.
+      tabsEl.classList.toggle('single', sessions.length === 1 && !SINGLE_PORT);
+    }
+
     function setActive(idx) {
       if (idx < 0 || idx >= sessions.length) return;
       sessions.forEach((s, i) => {
         s.wrap.classList.toggle('hidden', i !== idx);
-        const tab = tabsEl.children[i];
-        tab.classList.toggle('active', i === idx);
         if (i === idx) {
           s.hasUnread = false;
-          tab.querySelector('.dot').classList.remove('unread');
           s.term.focus();
         }
       });
       activeIdx = idx;
+      renderTabBar();
       requestAnimationFrame(() => active().resize());
-      location.hash = '#' + PORTS[idx];
+      const s = active();
+      location.hash = '#' + (s.sessionArg || s.port);
     }
 
-    // Honor URL hash (#7691) to start on a specific tab.
-    const hashPort = parseInt(location.hash.replace('#', ''), 10);
-    if (!isNaN(hashPort)) {
-      const i = PORTS.indexOf(hashPort);
+    function addSessionTab() {
+      if (!SINGLE_PORT) return;
+      const port = PORTS[0];
+      const sessionArg = generateSessionName(port);
+      const sess = createSession(port, sessionArg);
+      sessions.push(sess);
+      // Persist
+      const extras = loadExtraTabs();
+      extras.push({ port, sessionArg });
+      saveExtraTabs(extras);
+      setActive(sessions.length - 1);
+    }
+
+    async function closeSessionTab(idx) {
+      const s = sessions[idx];
+      if (!s.sessionArg) return;   // primary tabs aren't closable
+      try { s.ws.close(); } catch (_) {}
+      // Ask the server to kill the tmux session so it doesn't zombie out.
+      try {
+        await fetch('/api/term/kill?session=' + encodeURIComponent(s.sessionArg),
+                    { method: 'POST' });
+      } catch (_) {}
+      s.wrap.remove();
+      sessions.splice(idx, 1);
+      // Drop from localStorage
+      const extras = loadExtraTabs().filter(e =>
+        !(e.port === s.port && e.sessionArg === s.sessionArg));
+      saveExtraTabs(extras);
+      if (activeIdx >= sessions.length) activeIdx = sessions.length - 1;
+      setActive(Math.max(0, activeIdx));
+    }
+
+    // ── boot: create primary tabs from URL, restore extras from storage ──
+    PORTS.forEach(port => sessions.push(createSession(port, null)));
+    if (SINGLE_PORT) {
+      for (const ex of loadExtraTabs()) {
+        sessions.push(createSession(ex.port, ex.sessionArg));
+      }
+    }
+    lockHelperAttrs();
+    new MutationObserver(lockHelperAttrs).observe(document.body, { childList: true, subtree: true });
+    renderTabBar();
+    setActive(0);
+
+    // Honor URL hash (#7691 or #claude-2) to start on a specific tab.
+    const hashTok = location.hash.replace('#', '');
+    if (hashTok) {
+      const i = sessions.findIndex(s =>
+        (s.sessionArg && s.sessionArg === hashTok) ||
+        (!s.sessionArg && String(s.port) === hashTok));
       if (i >= 0) setActive(i);
     }
 

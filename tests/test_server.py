@@ -63,6 +63,48 @@ def test_term_page_rejects_unknown_port_in_multi_list(app_with_history):
     assert client.get("/term/7681,9999").status_code == 404
 
 
+def test_term_page_has_plus_and_close_buttons(app_with_history):
+    # "+" lets the user spawn extra parallel claude sessions on the same
+    # ttyd port; "×" on each extra tab kills its tmux session.
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert "tabAdd" in body                # the + button class
+    assert "addSessionTab" in body         # JS handler
+    assert "closeSessionTab" in body
+    assert "generateSessionName" in body
+    assert "tabClose" in body              # × indicator class
+    # Per-port localStorage key for extra tabs
+    assert "mttyd_extra_tabs_" in body
+
+
+def test_kill_endpoint_rejects_invalid_session():
+    # Garbage names rejected (400), reserved names refused (403).
+    from mttyd.server import create_app
+    app = create_app(None)
+    client = TestClient(app)
+    # Path/POST validation
+    assert client.post("/api/term/kill?session=").status_code == 400
+    assert client.post("/api/term/kill?session=../etc/passwd").status_code == 400
+    assert client.post("/api/term/kill?session=$(rm -rf)").status_code == 400
+    # Reserved sessions can't be killed
+    assert client.post("/api/term/kill?session=claude").status_code == 403
+    assert client.post("/api/term/kill?session=main").status_code == 403
+
+
+def test_kill_endpoint_accepts_safe_session_name():
+    # The endpoint runs tmux kill-session; if the session doesn't exist,
+    # tmux exits non-zero and we report killed=False. We're not testing
+    # tmux's behavior — just that the endpoint accepts the request shape.
+    from mttyd.server import create_app
+    app = create_app(None)
+    client = TestClient(app)
+    r = client.post("/api/term/kill?session=claude-test-doesnt-exist")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session"] == "claude-test-doesnt-exist"
+    assert "killed" in body
+
+
 def test_term_page_has_smooth_pointer_scroll(app_with_history):
     # Smooth scroll via Pointer Events + setPointerCapture. Without this,
     # mobile scroll is choppy and sometimes drops events.

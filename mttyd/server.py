@@ -16,6 +16,7 @@ Configuration is a YAML file with a `ports` map:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import time
@@ -80,6 +81,27 @@ def create_app(config_path: str | None = None) -> FastAPI:
         commands = rank_commands(text)
         cache[port] = (now, commands)
         return {"commands": commands, "cached": False}
+
+    @app.post("/api/term/kill")
+    async def term_kill(session: str) -> dict:
+        """Kill a local tmux session by name. Used by the page's `×` button
+        on user-spawned tabs so closed claudes don't pile up as zombies.
+        Rejects names that aren't [a-zA-Z0-9_-] (sanitization against
+        command injection through whatever calls this endpoint).
+        Refuses to kill names in a small reserved set so the page can't
+        accidentally nuke the user's main session."""
+        if not session or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in session):
+            raise HTTPException(400, "invalid session name")
+        if session in {"claude", "main", "default"}:
+            raise HTTPException(403, "refusing to kill reserved session")
+        proc = await asyncio.create_subprocess_exec(
+            "tmux", "kill-session", "-t", session,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+        return {"killed": proc.returncode == 0,
+                "session": session,
+                "error": err.decode().strip() or None}
 
     @app.get("/healthz")
     async def healthz() -> dict:

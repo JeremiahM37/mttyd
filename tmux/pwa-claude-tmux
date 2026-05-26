@@ -1,38 +1,30 @@
 #!/bin/bash
-# Persistent tmux session wrapper for ttyd.
+# Used by ttyd to attach to a tmux session running
+# `claude --dangerously-skip-permissions`. Same session name → re-attach;
+# different names → independent parallel claudes.
 #
-# Each ttyd connection re-attaches to the same tmux session (-A), so the
-# program inside survives disconnects, browser refreshes, and switching
-# devices. Tailored for `claude --dangerously-skip-permissions` by default
-# but works with any long-running CLI — set TMUX_CMD to override.
+# Session-name precedence:
+#   $1 (URL arg passed via ttyd --url-arg)
+#   $SESSION env var
+#   default "claude"
 #
-# Before attaching, dump the existing pane's full scrollback to stdout so
-# that xterm.js (which starts with an empty buffer on each page load) lands
-# with the conversation history visible. We exclude the visible area
-# (`-E -1`) to avoid duplication with tmux's own attach-time redraw.
+# Before attaching, dump the existing pane's scrollback to stdout so xterm.js
+# (which starts with an empty buffer on each page load) lands with conversation
+# history visible.
+SESSION="${1:-${SESSION:-claude}}"
+# Strip anything that isn't safe for a tmux session name. Without this the URL
+# arg could inject control chars or shell metacharacters.
+SESSION=$(echo "$SESSION" | tr -cd 'a-zA-Z0-9_-')
+[ -z "$SESSION" ] && SESSION=claude
 
-SESSION="${MTTYD_SESSION:-claude}"
-TMUX_CMD="${MTTYD_CMD:-claude --dangerously-skip-permissions}"
-
-# Start in $HOME so the embedded program sees a neutral CWD, not wherever
-# the supervisor (systemd, ttyd) happened to invoke us from.
+# Start Claude from the invoking user's $HOME, not wherever ttyd's CWD drifted
+# to. Otherwise Claude Code picks up a stale "project directory" from whatever
+# the systemd service last ran from.
 cd "$HOME" || cd /
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux capture-pane -p -t "$SESSION" -S -100000 -E -1 2>/dev/null
 fi
-
-# Wrap the inner command in a respawn loop so an accidental Ctrl-D or crash
-# doesn't kill the tmux session — the next page load reattaches cleanly.
 exec tmux new-session -A -s "$SESSION" -c "$HOME" -- \
-    bash -c '
-        while true; do
-            eval "$1"
-            status=$?
-            echo
-            echo "[mttyd] command exited (status=$status). Press any key to restart, Ctrl-C for a shell."
-            if read -t 5 -n 1; then continue; fi
-            echo "auto-restarting in 1s..."
-            sleep 1
-        done
-    ' -- "$TMUX_CMD"
+    bash -c 'while true; do "$@"; status=$?; echo; echo "[pwa-claude-tmux] claude exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."; read -t 5 -n 1 && continue || echo "auto-restarting in 1s..."; sleep 1; done' \
+    -- claude --dangerously-skip-permissions

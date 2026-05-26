@@ -86,6 +86,104 @@ def test_term_page_does_not_reintroduce_old_broken_hacks(app_with_history):
     assert ".xterm-screen" not in body             # ...or this
 
 
+def test_term_page_decodes_escape_sequences(app_with_history):
+    # Bug found by e2e: HTML attrs hold seqs as readable text like "\x1b[A",
+    # which JS reads as a literal 6-char string unless decoded. decodeSeq()
+    # converts \xHH / \t / \r / \n into actual bytes before sending. Without
+    # this, the keybar typed garbage text instead of triggering Ctrl-C etc.
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert "decodeSeq" in body
+    assert "String.fromCharCode(parseInt(hex, 16))" in body
+
+
+def test_term_page_has_settings_drawer(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert 'id="settings"' in body
+    assert 'id="settingsBtn"' in body
+    # Every setting field present
+    for fid in ("setFont", "setTheme", "setKeybar", "setLongpress",
+                "setAutoReconnect", "setWakeLock", "setSnippets", "setSnippetsText"):
+        assert f'id="{fid}"' in body, f"missing settings field {fid}"
+    # Settings persist per-port in localStorage
+    assert "mttyd_settings_" in body
+
+
+def test_term_page_has_five_themes(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    for name in ("dark", "light", "solarized-dark", "dracula", "nord"):
+        assert f'value="{name}"' in body, f"missing theme option {name}"
+    # Theme dictionary is populated with at least the expected keys
+    assert "THEMES" in body
+    # Dracula's signature background
+    assert "#282a36" in body
+
+
+def test_term_page_has_longpress_secondary_keys(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    # Long-press should map arrow keys to PgUp/PgDn/Home/End and ^C to ^D
+    assert r'data-seq-long="\x1b[5~"' in body   # PgUp
+    assert r'data-seq-long="\x1b[6~"' in body   # PgDn
+    assert r'data-seq-long="\x1b[H"'  in body   # Home
+    assert r'data-seq-long="\x1b[F"'  in body   # End
+    assert r'data-seq-long="\x04"'    in body   # ^D
+    assert "LONGPRESS_MS" in body
+
+
+def test_term_page_has_search_toolbar(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert 'id="searchbar"' in body
+    assert 'id="searchInput"' in body
+    assert 'id="searchBtn"' in body
+    # @xterm/addon-search loaded from CDN
+    assert "addon-search" in body
+    assert "SearchAddon" in body
+    assert "findNext" in body and "findPrevious" in body
+
+
+def test_term_page_has_copy_paste(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert 'id="copyBtn"' in body
+    assert 'id="pasteBtn"' in body
+    assert "navigator.clipboard.writeText" in body
+    assert "navigator.clipboard.readText" in body
+    assert "term.getSelection" in body
+
+
+def test_term_page_has_wake_lock(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert "wakeLock" in body
+    assert "navigator.wakeLock.request('screen')" in body
+    # Release on visibilitychange so we don't drain battery in background
+    assert "visibilitychange" in body
+
+
+def test_term_page_has_reconnect_overlay(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert 'id="reconnect"' in body
+    assert 'id="reconnectBtn"' in body
+    # Auto-reconnect with exponential backoff up to 3 attempts
+    assert "reconnectAttempts" in body
+    assert "Math.pow(2," in body
+
+
+def test_term_page_has_snippet_bar(app_with_history):
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert 'id="snippetbar"' in body
+    assert "parseSnippets" in body
+    assert "renderSnippets" in body
+    # Snippets are sent with a trailing CR so they execute as commands
+    assert r"+ '\r'" in body
+
+
 def test_unknown_port_returns_404(app_with_history):
     client = TestClient(app_with_history)
     assert client.get("/term/9999").status_code == 404

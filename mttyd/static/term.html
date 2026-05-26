@@ -359,10 +359,26 @@
       if (document.fonts && document.fonts.ready) document.fonts.ready.then(doResize);
 
       // Smooth pointer-event scroll, per-term.
+      // ─ Hold finger still ~500ms → enter line-selection mode. Drag extends
+      //   by line, lift copies the selection to clipboard and flashes the
+      //   Copy button. This is how you actually grab text out of the
+      //   terminal on a phone (xterm.js's native selection competes with
+      //   our scroll handler and loses).
       (function smoothScroll() {
         const PX_PER_LINE = 7, FRICTION = 0.93, STOP_V = 0.04;
+        const LP_MS = 500, LP_MOVE_TOLERANCE = 10;
         let startY = null, prevY = 0, prevT = 0;
         let scrolledLines = 0, velocity = 0, raf = null, activePtr = -1;
+        let lpTimer = null, selecting = false, selStartRow = null;
+
+        function lineAtY(clientY) {
+          const rect = inner.getBoundingClientRect();
+          const relY = clientY - rect.top;
+          const lineH = rect.height / term.rows;
+          const visRow = Math.max(0, Math.min(term.rows - 1, Math.floor(relY / lineH)));
+          return term.buffer.active.viewportY + visRow;
+        }
+
         function step() {
           const now = performance.now();
           const dt = now - prevT; prevT = now;
@@ -379,10 +395,29 @@
           activePtr = e.pointerId;
           startY = e.clientY; prevY = startY;
           prevT = performance.now();
-          scrolledLines = 0; velocity = 0;
+          scrolledLines = 0; velocity = 0; selecting = false;
+          // Arm long-press timer.
+          if (lpTimer) clearTimeout(lpTimer);
+          lpTimer = setTimeout(() => {
+            lpTimer = null;
+            selecting = true;
+            selStartRow = lineAtY(startY);
+            term.selectLines(selStartRow, selStartRow);
+            if (navigator.vibrate) navigator.vibrate(30);
+          }, LP_MS);
         });
         inner.addEventListener('pointermove', e => {
           if (e.pointerId !== activePtr || startY === null) return;
+          // If we've moved enough before the LP timer fires, treat as scroll.
+          if (lpTimer && Math.abs(e.clientY - startY) > LP_MOVE_TOLERANCE) {
+            clearTimeout(lpTimer); lpTimer = null;
+          }
+          if (selecting) {
+            const row = lineAtY(e.clientY);
+            term.selectLines(Math.min(selStartRow, row), Math.max(selStartRow, row));
+            if (e.cancelable) e.preventDefault();
+            return;
+          }
           const y = e.clientY, t = performance.now();
           const targetLines = Math.round((startY - y) / PX_PER_LINE);
           const delta = targetLines - scrolledLines;
@@ -393,8 +428,20 @@
         });
         function endPtr(e) {
           if (e.pointerId !== activePtr) return;
+          if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
           activePtr = -1; startY = null;
           try { inner.releasePointerCapture(e.pointerId); } catch (_) {}
+          if (selecting) {
+            selecting = false;
+            const text = term.getSelection();
+            if (text) {
+              copyText(text).then(ok => {
+                if (ok) flashCopy(document.getElementById('copyBtn'));
+              });
+              setTimeout(() => term.clearSelection(), 600);
+            }
+            return;
+          }
           if (Math.abs(velocity) > STOP_V) {
             prevT = performance.now();
             raf = requestAnimationFrame(step);
@@ -678,18 +725,57 @@
     });
 
     // ── copy/paste (active tab) ─────────────────────────────────────────
+    // Selecting text on mobile is fiddly (touch handlers + xterm.js compete),
+    // so Copy falls back to "everything in the visible viewport" if there's
+    // no explicit selection — that's what users actually want 90% of the time
+    // (grab the error on screen and paste it elsewhere).
+    async function copyText(text) {
+      if (!text) return false;
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (_) {
+        // Fallback for non-HTTPS contexts where the Clipboard API is blocked.
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;top:-9999px;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+        return ok;
+      }
+    }
+    function visibleText(term) {
+      const buf = term.buffer.active;
+      const startY = buf.viewportY;
+      const lines = [];
+      for (let y = startY; y < startY + term.rows; y++) {
+        const line = buf.getLine(y);
+        if (line) lines.push(line.translateToString(true));
+      }
+      // Trim trailing blank lines so we don't paste a screenful of whitespace.
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      return lines.join('\n');
+    }
+    function flashCopy(btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 900);
+    }
     document.getElementById('copyBtn').addEventListener('click', async () => {
-      const sel = active().term.getSelection();
-      if (!sel) return;
-      try { await navigator.clipboard.writeText(sel); } catch (_) {}
+      const t = active().term;
+      const text = t.getSelection() || visibleText(t);
+      if (await copyText(text)) flashCopy(document.getElementById('copyBtn'));
     });
     document.getElementById('pasteBtn').addEventListener('click', async () => {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (!text) return;
-        const s = active();
-        if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', text);
-      } catch (_) {}
+      let text = '';
+      try { text = await navigator.clipboard.readText(); }
+      catch (_) { /* permissions/blocked: nothing we can do for paste */ }
+      if (!text) return;
+      const s = active();
+      if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', text);
     });
   </script>
 </body>

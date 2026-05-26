@@ -18,10 +18,25 @@ def test_wrapper_dumps_scrollback_on_attach():
     assert "capture-pane" in WRAPPER.read_text()
 
 
-def test_wrapper_starts_in_home_not_inherited_cwd():
+def test_wrapper_starts_in_workdir_not_inherited_cwd():
+    # Primary session lives in $HOME. Extra (user-spawned) sessions get
+    # their own subdirectory under ~/.claude-sessions/$SESSION so Claude
+    # treats each as an independent project. Either way, the wrapper must
+    # cd somewhere deliberate before exec-ing tmux — not whatever inherited
+    # CWD ttyd happened to have.
     body = WRAPPER.read_text()
-    assert 'cd "$HOME"' in body
-    assert '-c "$HOME"' in body
+    assert 'WORKDIR=' in body
+    assert 'cd "$WORKDIR"' in body
+    assert '-c "$WORKDIR"' in body
+    assert '$HOME/.claude-sessions/' in body   # extra-session workdir scheme
+
+
+def test_wrapper_unsets_claudecode_for_nested_session_bypass():
+    # Claude Code refuses to launch with CLAUDECODE set in the env. The
+    # wrapper unsets it so user-spawned tabs can actually open a new claude
+    # alongside the one running in the parent tmux session.
+    body = WRAPPER.read_text()
+    assert "unset CLAUDECODE" in body
 
 
 def test_tmux_conf_disables_alt_screen():

@@ -41,9 +41,21 @@ PY
 fi
 cd "$WORKDIR" || cd /
 
+# Also scrub CLAUDECODE from the tmux server's saved env so it doesn't leak
+# into future sessions. The tmux SERVER captures env at first-start; new-session
+# spawns its child shell from that snapshot, not from our wrapper's env. Without
+# this scrub, the inner bash (below) sees a CLAUDECODE inherited from whoever
+# originally launched the tmux server. -u removes the variable entirely.
+tmux set-environment -gu CLAUDECODE       2>/dev/null
+tmux set-environment -gu CLAUDE_CODE_SSE_PORT  2>/dev/null
+tmux set-environment -gu CLAUDE_CODE_ENTRYPOINT 2>/dev/null
+
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux capture-pane -p -t "$SESSION" -S -100000 -E -1 2>/dev/null
 fi
+# Belt-and-suspenders: also `unset CLAUDECODE` inside the bash that actually
+# exec()s claude — covers the case where the tmux server env scrub above
+# raced or somehow didn't take.
 exec tmux new-session -A -s "$SESSION" -c "$WORKDIR" -- \
-    bash -c 'while true; do "$@"; status=$?; echo; echo "[pwa-claude-tmux] claude exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."; read -t 5 -n 1 && continue || echo "auto-restarting in 1s..."; sleep 1; done' \
+    bash -c 'unset CLAUDECODE CLAUDE_CODE_SSE_PORT CLAUDE_CODE_ENTRYPOINT; while true; do "$@"; status=$?; echo; echo "[pwa-claude-tmux] claude exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."; read -t 5 -n 1 && continue || echo "auto-restarting in 1s..."; sleep 1; done' \
     -- claude --dangerously-skip-permissions

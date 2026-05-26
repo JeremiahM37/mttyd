@@ -14,12 +14,33 @@
        a drag-down as pull-to-refresh, which otherwise reloads the page the
        moment the user tries to scroll. */
     html, body { margin: 0; padding: 0; height: 100%; background: #000;
-                 overscroll-behavior: none; touch-action: none; }
-    #term { position: absolute; inset: 0; }
+                 overscroll-behavior: none; touch-action: none;
+                 display: flex; flex-direction: column; }
+    #term { flex: 1; min-height: 0; position: relative; }
+    /* Bottom key bar: arrows + Tab + Esc + Ctrl-C — keys Claude/TUIs need
+       that phone keyboards either lack or hide behind a switcher. */
+    #keybar { display: flex; height: 44px; background: #0b1020;
+              border-top: 1px solid #1e293b; flex-shrink: 0;
+              padding-bottom: env(safe-area-inset-bottom, 0); }
+    .keybtn { flex: 1; background: transparent; border: 0;
+              border-right: 1px solid #1e293b; color: #cbd5e1;
+              font-family: ui-monospace, Menlo, monospace; font-size: 16px;
+              touch-action: manipulation; user-select: none; }
+    .keybtn:last-child { border-right: 0; }
+    .keybtn:active { background: #1e293b; color: #818cf8; }
   </style>
 </head>
 <body>
   <div id="term"></div>
+  <div id="keybar">
+    <button class="keybtn" data-seq="\x1b[A">↑</button>
+    <button class="keybtn" data-seq="\x1b[B">↓</button>
+    <button class="keybtn" data-seq="\x1b[D">←</button>
+    <button class="keybtn" data-seq="\x1b[C">→</button>
+    <button class="keybtn" data-seq="\t">Tab</button>
+    <button class="keybtn" data-seq="\x1b">Esc</button>
+    <button class="keybtn" data-seq="\x03">^C</button>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
   <script>
@@ -169,6 +190,15 @@
       termEl.addEventListener('pointerup', endPointer);
       termEl.addEventListener('pointercancel', endPointer);
     })();
+
+    // Bottom key bar: each button has data-seq="<escape sequence>".
+    // On click, send those bytes to ttyd as if the user typed them.
+    document.querySelectorAll('.keybtn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        send('0', btn.dataset.seq);
+      });
+    });
   </script>
 </body>
 </html>

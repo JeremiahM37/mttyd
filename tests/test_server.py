@@ -56,6 +56,24 @@ def test_term_page_prevents_pull_to_refresh(app_with_history):
     assert "overscroll-behavior: none" in body
 
 
+def test_term_page_has_keybar_with_essentials(app_with_history):
+    # Bottom key bar covers what phone keyboards either lack or hide:
+    # arrows for TUI navigation, Tab for completion, Esc to back out,
+    # ^C to interrupt running commands.
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert 'id="keybar"' in body
+    # arrow escape sequences (ESC [ A/B/C/D)
+    assert "x1b[A" in body and "x1b[B" in body
+    assert "x1b[C" in body and "x1b[D" in body
+    # Tab + Esc + Ctrl-C
+    assert r'data-seq="\t"' in body
+    assert r'data-seq="\x1b"' in body
+    assert r'data-seq="\x03"' in body
+    # handler that wires button clicks to send()
+    assert "querySelectorAll('.keybtn')" in body
+
+
 def test_term_page_does_not_reintroduce_old_broken_hacks(app_with_history):
     # Old wireTouchScroll() with manual scrollLines was glitchy. Old
     # !important touch-action on .xterm-viewport / .xterm-screen fought

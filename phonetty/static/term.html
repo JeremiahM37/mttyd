@@ -2,115 +2,70 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#0b1020">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#000">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>terminal __PORT__</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; background: #0b1020;
-                 overscroll-behavior: none; color: #e2e8f0;
-                 font-family: ui-sans-serif, system-ui, sans-serif; }
-    #app    { display: flex; flex-direction: column; height: 100%; }
-    #cmdBar { background: #0f172a; border-bottom: 1px solid #1e293b;
-              padding: 6px 8px; display: flex; gap: 6px; align-items: center; }
-    #cmdInput { flex: 1; background: #1e293b; border: 1px solid #334155;
-                color: #e2e8f0; border-radius: 6px; padding: 8px 10px;
-                font-size: 14px; min-width: 0; }
-    #cmdInput:focus { outline: none; border-color: #6366f1; }
-    #sendBtn { background: #6366f1; color: white; border: 0; border-radius: 6px;
-               padding: 8px 14px; font-size: 14px; font-weight: 600; }
-    #sendBtn:active { background: #4f46e5; }
-    /* Custom suggestion dropdown — replaces native <datalist>, which races
-       Gboard's prediction strip on Android and double-inserts words. */
-    #cmdSuggest {
-      display: none; background: #0f172a; border-bottom: 1px solid #1e293b;
-      max-height: 35vh; overflow-y: auto;
-    }
-    #cmdSuggest.open { display: block; }
-    .cmdSuggestItem {
-      padding: 10px 12px; font-size: 14px; font-family: ui-monospace, Menlo, monospace;
-      color: #e2e8f0; border-bottom: 1px solid #1e293b; cursor: pointer;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .cmdSuggestItem:active { background: #1e293b; }
-    .cmdSuggestItem .match { color: #818cf8; font-weight: 600; }
-    #term   { flex: 1; padding: 4px; background: #000; min-height: 0; }
-    /* Touch scroll fixes: viewport must accept vertical touch panning, and
-       iOS Safari needs the legacy -webkit-overflow-scrolling hint. */
-    .xterm-viewport {
-      background: #000 !important;
-      touch-action: pan-y !important;
-      -webkit-overflow-scrolling: touch !important;
-      overflow-y: auto !important;
-    }
-    .xterm-screen { touch-action: pan-y !important; }
+    /* overscroll-behavior + touch-action prevent the browser from treating
+       a drag-down as pull-to-refresh, which otherwise reloads the page the
+       moment the user tries to scroll. */
+    html, body { margin: 0; padding: 0; height: 100%; background: #000;
+                 overscroll-behavior: none; touch-action: none; }
+    #term { position: absolute; inset: 0; }
   </style>
 </head>
 <body>
-  <div id="app">
-    <div id="cmdBar">
-      <input id="cmdInput" type="text"
-             spellcheck="true" autocomplete="off" autocapitalize="off" autocorrect="off"
-             inputmode="text" enterkeyhint="send"
-             placeholder="type a command — tap a suggestion or hit Send">
-      <button id="sendBtn">Send</button>
-    </div>
-    <div id="cmdSuggest"></div>
-    <div id="term"></div>
-  </div>
-
+  <div id="term"></div>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
   <script>
     const PORT = __PORT__;
     const HOST = location.hostname;
 
-    // ── terminal ─────────────────────────────────────────────────────────────
     const term = new window.Terminal({
-      fontSize: 26,
-      fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
-      cursorBlink: true, scrollback: 100000,
-      theme: { background: '#000000', foreground: '#e2e8f0', cursor: '#818cf8' },
+      fontSize: 12,
+      fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+      cursorBlink: true,
+      scrollback: 100000,
+      theme: { background: '#000000' },
     });
     const fit = new window.FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(document.getElementById('term'));
     fit.fit();
 
-    // Touch-scroll fix: xterm.js's .xterm-screen swallows touch events, so wire
-    // touchstart/move ourselves and call scrollLines(). Without this, touch on
-    // mobile does nothing because the viewport never sees the gesture.
-    (function wireTouchScroll() {
-      const termEl = document.getElementById('term');
-      let lastY = null;
-      const charHeight = () => {
-        const v = document.querySelector('.xterm-viewport');
-        return v ? v.scrollHeight / Math.max(term.buffer.active.length, 1) : 26;
-      };
-      termEl.addEventListener('touchstart', e => {
-        if (e.touches.length === 1) lastY = e.touches[0].clientY;
-      }, { passive: true });
-      termEl.addEventListener('touchmove', e => {
-        if (e.touches.length !== 1 || lastY === null) return;
-        const y = e.touches[0].clientY;
-        const dy = lastY - y;
-        const h = charHeight();
-        const lines = Math.trunc(dy / h);
-        if (lines !== 0) {
-          term.scrollLines(lines);
-          lastY = y - (dy - lines * h);
-          if (e.cancelable) e.preventDefault();
-        }
-      }, { passive: false });
-      termEl.addEventListener('touchend', () => { lastY = null; }, { passive: true });
-    })();
+    // Gboard predictive-text fix on xterm.js's hidden helper textarea.
+    // Plain autocomplete="off" is ignored by Android Gboard about half the
+    // time — pile on more attributes (inputmode + Grammarly hints) and watch
+    // for xterm.js replacing the element via MutationObserver. Skip
+    // setAttribute when value is already correct to avoid the
+    // observer-self-trigger infinite loop.
+    const HELPER_ATTRS = {
+      autocomplete: 'off',
+      autocorrect: 'off',
+      autocapitalize: 'none',
+      spellcheck: 'false',
+      inputmode: 'url',
+      'data-gramm': 'false',
+      'data-gramm_editor': 'false',
+    };
+    function lockHelperAttrs() {
+      const helper = document.querySelector('.xterm-helper-textarea');
+      if (!helper) return;
+      for (const [k, v] of Object.entries(HELPER_ATTRS)) {
+        if (helper.getAttribute(k) !== v) helper.setAttribute(k, v);
+      }
+    }
+    lockHelperAttrs();
+    new MutationObserver(lockHelperAttrs).observe(
+      document.body, { childList: true, subtree: true }
+    );
 
-    // ── ttyd WebSocket protocol (binary frames) ──────────────────────────────
-    // Server → client: '0' + utf8 output | '1' + title | '2' + json prefs
-    // Client → server: '0' + utf8 input  | '1' + json{cols,rows} | '2' + auth
+    // ttyd 1.7.x WebSocket protocol — JSON_DATA opcode is '{'.
     const ws = new WebSocket('ws://' + HOST + ':' + PORT + '/ws', ['tty']);
     ws.binaryType = 'arraybuffer';
     const enc = new TextEncoder();
@@ -125,7 +80,7 @@
     }
 
     ws.onopen = () => {
-      send('2', JSON.stringify({ AuthToken: "", columns: term.cols, rows: term.rows }));
+      send('{', JSON.stringify({ AuthToken: "", columns: term.cols, rows: term.rows }));
     };
     ws.onmessage = (ev) => {
       const buf  = new Uint8Array(ev.data);
@@ -145,106 +100,75 @@
     }
     window.addEventListener('resize', doResize);
     new ResizeObserver(doResize).observe(document.getElementById('term'));
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(doResize);
 
-    // ── command bar: spellcheck + custom suggestion dropdown ────────────────
-    const input   = document.getElementById('cmdInput');
-    const suggest = document.getElementById('cmdSuggest');
-    const HISTORY_KEY = 'phonetty_history_' + PORT;
+    // Smooth scroll via Pointer Events + setPointerCapture. The modern,
+    // reliable way to do touch tracking:
+    //   - setPointerCapture redirects all pointermove events to us regardless
+    //     of what's on top — no racing with xterm.js's own handlers
+    //   - Pointer events aren't coalesced by the browser the way touch events
+    //     can be, so move samples arrive consistently
+    //   - Anchored math (target = round((startY - y) / PX_PER_LINE)) means
+    //     each move recomputes "where finger is" relative to gesture start
+    //     — no event-loss drift, no "only 1 line per swipe" stutter
+    //   - Friction-based momentum kicks in after pointerup
+    (function smoothTouchScroll() {
+      const termEl = document.getElementById('term');
+      const PX_PER_LINE = 7;
+      const FRICTION   = 0.93;
+      const STOP_V     = 0.04;
+      let startY = null, prevY = 0, prevT = 0;
+      let scrolledLines = 0, velocity = 0, raf = null, activeId = -1;
 
-    let allCommands = [];
+      function step() {
+        const now = performance.now();
+        const dt = now - prevT; prevT = now;
+        velocity *= Math.pow(FRICTION, dt / 16);
+        if (Math.abs(velocity) < STOP_V) { raf = null; return; }
+        const lines = Math.round(velocity * dt / PX_PER_LINE);
+        if (lines !== 0) term.scrollLines(lines);
+        raf = requestAnimationFrame(step);
+      }
 
-    function loadLocal() {
-      try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
-      catch { return []; }
-    }
-    function pushLocal(cmd) {
-      const list = loadLocal().filter(c => c !== cmd);
-      list.unshift(cmd);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, 50)));
-    }
+      termEl.addEventListener('pointerdown', e => {
+        if (e.pointerType !== 'touch') return;   // mouse falls through to xterm.js
+        if (raf !== null) { cancelAnimationFrame(raf); raf = null; }
+        try { termEl.setPointerCapture(e.pointerId); } catch (_) {}
+        activeId = e.pointerId;
+        startY = e.clientY; prevY = startY;
+        prevT = performance.now();
+        scrolledLines = 0; velocity = 0;
+      });
 
-    function esc(s) {
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
-    function render(matches, query) {
-      if (!matches.length) { suggest.classList.remove('open'); return; }
-      const q = query.toLowerCase();
-      suggest.innerHTML = matches.slice(0, 25).map(cmd => {
-        const idx = cmd.toLowerCase().indexOf(q);
-        let display;
-        if (q && idx >= 0) {
-          display = esc(cmd.slice(0, idx)) +
-                    '<span class="match">' + esc(cmd.slice(idx, idx + q.length)) + '</span>' +
-                    esc(cmd.slice(idx + q.length));
-        } else {
-          display = esc(cmd);
+      termEl.addEventListener('pointermove', e => {
+        if (e.pointerId !== activeId || startY === null) return;
+        const y = e.clientY;
+        const t = performance.now();
+        const targetLines = Math.round((startY - y) / PX_PER_LINE);
+        const delta = targetLines - scrolledLines;
+        if (delta !== 0) {
+          term.scrollLines(delta);
+          scrolledLines = targetLines;
         }
-        return `<div class="cmdSuggestItem" data-cmd="${esc(cmd)}">${display}</div>`;
-      }).join('');
-      suggest.classList.add('open');
-    }
+        const dt = Math.max(t - prevT, 1);
+        velocity = (prevY - y) / dt;
+        prevY = y; prevT = t;
+        if (e.cancelable) e.preventDefault();
+      });
 
-    function filter(query) {
-      const q = (query || '').toLowerCase().trim();
-      if (!q) { render(allCommands, ''); return; }
-      const prefix = [], contains = [];
-      for (const c of allCommands) {
-        const lc = c.toLowerCase();
-        if (lc === q) continue;
-        if (lc.startsWith(q)) prefix.push(c);
-        else if (lc.includes(q)) contains.push(c);
+      function endPointer(e) {
+        if (e.pointerId !== activeId) return;
+        activeId = -1;
+        startY = null;
+        try { termEl.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (Math.abs(velocity) > STOP_V) {
+          prevT = performance.now();
+          raf = requestAnimationFrame(step);
+        }
       }
-      render([...prefix, ...contains], query);
-    }
-
-    async function refreshSuggestions() {
-      const local = loadLocal();
-      let server = [];
-      try {
-        const r = await fetch('/api/term/history?port=' + PORT);
-        if (r.ok) server = (await r.json()).commands || [];
-      } catch {}
-      const seen = new Set();
-      const merged = [];
-      for (const c of [...local, ...server]) {
-        if (!seen.has(c)) { seen.add(c); merged.push(c); }
-      }
-      allCommands = merged.slice(0, 500);
-    }
-
-    // Tap a suggestion → set input value cleanly (single source of truth, no
-    // string concatenation, no race with the keyboard's prediction strip).
-    suggest.addEventListener('click', e => {
-      const item = e.target.closest('.cmdSuggestItem');
-      if (!item) return;
-      input.value = item.dataset.cmd;
-      suggest.classList.remove('open');
-      input.focus();
-    });
-
-    input.addEventListener('input', () => filter(input.value));
-    input.addEventListener('focus', () => filter(input.value));
-    input.addEventListener('blur', () => {
-      setTimeout(() => suggest.classList.remove('open'), 150);
-    });
-
-    function sendCommand() {
-      const cmd = input.value;
-      if (!cmd || ws.readyState !== WebSocket.OPEN) return;
-      send('0', cmd + '\r');
-      pushLocal(cmd);
-      input.value = '';
-      suggest.classList.remove('open');
-      setTimeout(refreshSuggestions, 50);
-      term.focus();
-    }
-    document.getElementById('sendBtn').addEventListener('click', sendCommand);
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); sendCommand(); }
-    });
-
-    refreshSuggestions();
+      termEl.addEventListener('pointerup', endPointer);
+      termEl.addEventListener('pointercancel', endPointer);
+    })();
   </script>
 </body>
 </html>

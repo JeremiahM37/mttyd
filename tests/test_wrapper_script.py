@@ -31,6 +31,6 @@ def test_tmux_conf_disables_alt_screen():
 
 
 def test_tmux_conf_disables_mouse():
-    # Mouse-on captures touch events for copy-mode, blocking the browser
-    # viewport from scrolling on phones.
+    # Mouse off so touch/scroll passes through and the user isn't trapped
+    # in copy-mode (which needs `q` to exit — hard on a phone keyboard).
     assert "set -g mouse off" in TMUX_CONF.read_text()

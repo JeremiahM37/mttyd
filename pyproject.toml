@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "phonetty"
+name = "mttyd"
 version = "0.1.0"
 description = "Mobile-friendly wrapper around ttyd — touch scroll, command bar, tmux scrollback replay."
 readme = "README.md"
@@ -25,13 +25,13 @@ classifiers = [
 test = ["pytest>=7", "httpx>=0.27"]
 
 [project.scripts]
-phonetty = "phonetty.server:main"
+mttyd = "mttyd.server:main"
 
 [project.urls]
-Homepage = "https://github.com/JeremiahM37/phonetty"
+Homepage = "https://github.com/JeremiahM37/mttyd"
 
 [tool.setuptools.packages.find]
-include = ["phonetty*"]
+include = ["mttyd*"]
 
 [tool.setuptools.package-data]
-phonetty = ["static/*.html"]
+mttyd = ["static/*.html"]

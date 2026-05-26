@@ -1,4 +1,4 @@
-"""Phonetty HTTP server.
+"""mttyd HTTP server.
 
 Serves two things:
   GET /term/{port}            HTML wrapper that connects xterm.js to ttyd at PORT
@@ -39,7 +39,7 @@ def load_config(path: str | None) -> dict[int, dict[str, Any]]:
 
 
 def create_app(config_path: str | None = None) -> FastAPI:
-    app = FastAPI(title="phonetty", version="0.1.0")
+    app = FastAPI(title="mttyd", version="0.1.0")
     ports = load_config(config_path)
     cache: dict[int, tuple[float, list[str]]] = {}
 
@@ -71,8 +71,8 @@ def create_app(config_path: str | None = None) -> FastAPI:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(prog="phonetty")
-    p.add_argument("--config", default=os.environ.get("PHONETTY_CONFIG"),
+    p = argparse.ArgumentParser(prog="mttyd")
+    p.add_argument("--config", default=os.environ.get("MTTYD_CONFIG"),
                    help="Path to ports YAML config")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)

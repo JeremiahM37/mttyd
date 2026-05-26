@@ -1,4 +1,4 @@
-# Phonetty
+# mttyd
 
 Make [ttyd](https://github.com/tsl0922/ttyd) usable on a phone.
 
@@ -11,7 +11,7 @@ refreshes.
 
 ttyd is great on desktops. On a phone it isn't:
 
-| Problem | Why | Phonetty's fix |
+| Problem | Why | mttyd's fix |
 |---|---|---|
 | Default font is unreadable on a 6" screen | ttyd's index page has no mobile viewport | Wrapper page sets `viewport`, scales xterm.js up |
 | Touch scroll doesn't work | `.xterm-screen` swallows touch events before they reach the viewport | Custom `touchmove → term.scrollLines()` handler |
@@ -22,16 +22,16 @@ ttyd is great on desktops. On a phone it isn't:
 ## Quick start
 
 ```bash
-pip install phonetty
+pip install mttyd
 
 # in one shell, start ttyd attached to whatever you want exposed
 ttyd -p 7681 -W tmux new-session -A -s main
 
-# in another, point phonetty at that port
-phonetty --config phonetty.yaml --port 8080
+# in another, point mttyd at that port
+mttyd --config mttyd.yaml --port 8080
 ```
 
-`phonetty.yaml`:
+`mttyd.yaml`:
 ```yaml
 ports:
   7681:
@@ -42,11 +42,11 @@ Open `http://your-server:8080/term/7681` on your phone.
 
 The page is a single self-contained HTML document — xterm.js loads from a
 CDN, the WebSocket connects directly to ttyd at `ws://host:7681/ws`, and
-phonetty only ever serves the wrapper and the history endpoint.
+mttyd only ever serves the wrapper and the history endpoint.
 
 ## Configuration
 
-Each port entry in `phonetty.yaml` declares one of:
+Each port entry in `mttyd.yaml` declares one of:
 
 - `history: { file: /path/to/.bash_history }` — read a local file
 - `history: { ssh: user@host, path: ~/.bash_history }` — pull over SSH (uses your agent / keys)
@@ -54,7 +54,7 @@ Each port entry in `phonetty.yaml` declares one of:
 Ports not in the config return 404 from `/term/{port}`. That's the access
 control mechanism — keep the file tight.
 
-Config-less mode (`phonetty` with no `--config`) skips the whitelist and
+Config-less mode (`mttyd` with no `--config`) skips the whitelist and
 serves the wrapper for any port, with an empty history. Useful for one-off
 LAN setups; **don't expose it to the internet that way.**
 
@@ -77,7 +77,7 @@ chmod +x ~/.local/bin/pwa-claude-tmux
 ttyd -p 7691 -W ~/.local/bin/pwa-claude-tmux
 
 # Or anything else:
-PHONETTY_CMD="htop" PHONETTY_SESSION="htop" ttyd -p 7692 -W ~/.local/bin/pwa-claude-tmux
+MTTYD_CMD="htop" MTTYD_SESSION="htop" ttyd -p 7692 -W ~/.local/bin/pwa-claude-tmux
 ```
 
 Append `tmux/tmux.conf` to `~/.tmux.conf` for the matching tmux side

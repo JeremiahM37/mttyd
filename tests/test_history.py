@@ -1,5 +1,5 @@
 """rank_commands — frequency × recency ordering."""
-from phonetty.history import rank_commands
+from mttyd.history import rank_commands
 
 
 def test_empty_input_returns_empty_list():

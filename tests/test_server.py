@@ -5,14 +5,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from phonetty.server import create_app
+from mttyd.server import create_app
 
 
 @pytest.fixture
 def app_with_history(tmp_path: Path):
     hist = tmp_path / ".bash_history"
     hist.write_text("git status\ngit status\ngit pull\nls -la\n")
-    config = tmp_path / "phonetty.yaml"
+    config = tmp_path / "mttyd.yaml"
     config.write_text(textwrap.dedent(f"""
         ports:
           7681:

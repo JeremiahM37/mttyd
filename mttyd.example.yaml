@@ -1,4 +1,4 @@
-# phonetty config — map each ttyd port to a bash_history source.
+# mttyd config — map each ttyd port to a bash_history source.
 # History is used to seed the in-page command-suggestion dropdown.
 #
 # Each port entry has a `history` key with one of two shapes:

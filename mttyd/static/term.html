@@ -421,16 +421,19 @@
     // double-typing (which would have to be inside 500ms AND identical) is
     // very rare while autocorrect dups (~10ms apart) are caught.
     const _lastInputWrite = new WeakMap();
+    window._mttydWsLog = [];
     function sendWs(ws, prefix, payload) {
       if (prefix === '0') {
         const last = _lastInputWrite.get(ws);
         const now  = Date.now();
         if (last && last.text === payload && (now - last.ts) < 500) {
-          // Drop the duplicate — preserves the typed chars in PTY without
-          // the second copy that xterm.js's compositionend handler adds.
+          window._mttydWsLog.push('[dup-dropped] ' + payload);
+          if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
           return;
         }
         _lastInputWrite.set(ws, { text: payload, ts: now });
+        window._mttydWsLog.push(payload);
+        if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
       }
       const body = enc.encode(payload);
       const buf  = new Uint8Array(body.length + 1);
@@ -787,12 +790,20 @@
       if (!isHelperTextarea(e.target)) return;
       const it = e.inputType || '(none)';
       const data = typeof e.data === 'string' ? e.data : null;
-      const blocked = BLOCKED_INPUT_TYPES.has(it);
+      // Block:
+      //  (a) known-bad input types (paste-replace, yank, drop, etc.)
+      //  (b) plain insertText whose data is multi-char — that's Gboard's
+      //      "autocorrect via insertText with the diff" pattern, which
+      //      produces 'tetingsting' (typed prefix kept + corrected suffix
+      //      appended). Legitimate single-char typing fires insertText
+      //      with data.length === 1 and is allowed through.
+      const multiCharInsertText =
+        (it === 'insertText') && data && data.length > 1;
+      const blocked = BLOCKED_INPUT_TYPES.has(it) || multiCharInsertText;
       window._mttydInputLog.push({
         evt: e.type, inputType: it, data, len: data ? data.length : 0,
         blocked, ts: Date.now(),
       });
-      // Keep log bounded
       if (window._mttydInputLog.length > 200) window._mttydInputLog.splice(0, 100);
       if (blocked) {
         e.stopImmediatePropagation();
@@ -806,6 +817,51 @@
       console.log('=== mttyd input log (' + window._mttydInputLog.length + ' events) ===');
       window._mttydInputLog.forEach(e => console.log(JSON.stringify(e)));
       return window._mttydInputLog;
+    };
+
+    // On-screen debug overlay — opt in with ?debug=1 in the URL (or run
+    // `mttydDebug.show()` from devtools). Shows the most recent input
+    // events AND every byte sent over the WebSocket, so you can repro a
+    // mobile-keyboard bug, screenshot the overlay, send it to anyone
+    // helping fix the issue. Mobile-Safari-friendly: no console required.
+    const _debugEnabled = new URL(location.href).searchParams.has('debug');
+    const dbgPanel = document.createElement('div');
+    dbgPanel.id = 'mttydDbg';
+    dbgPanel.style.cssText = 'position:fixed;top:0;right:0;width:100%;'
+      + 'max-width:520px;max-height:60vh;overflow:auto;background:rgba(0,0,0,0.92);'
+      + 'color:#9be7ff;font:11px ui-monospace,Menlo,monospace;padding:4px;'
+      + 'z-index:100;border-bottom-left-radius:8px;line-break:anywhere;'
+      + 'display:' + (_debugEnabled ? 'block' : 'none');
+    document.body.appendChild(dbgPanel);
+    function _renderDbg() {
+      if (dbgPanel.style.display === 'none') return;
+      const ev = (window._mttydInputLog || []).slice(-18);
+      const wsOut = (window._mttydWsLog || []).slice(-12);
+      dbgPanel.innerHTML =
+        '<b style="color:#fbbf24">input events (last ' + ev.length + ')</b>'
+        + ev.map(e => `<div>${e.evt}  ${e.inputType||''}  data=${JSON.stringify(e.data)}  ${e.blocked?'<span style="color:#f87171">BLOCKED</span>':''}</div>`).join('')
+        + '<b style="color:#fbbf24">→ PTY (last ' + wsOut.length + ')</b>'
+        + wsOut.map(t => `<div>${JSON.stringify(t)}</div>`).join('')
+        + '<div style="color:#94a3b8;margin-top:4px">add <code>?debug=1</code> to URL to keep visible; tap to hide</div>';
+    }
+    dbgPanel.addEventListener('click', () => { dbgPanel.style.display = 'none'; });
+    setInterval(_renderDbg, 500);
+    // Tap the gear icon 5 times in quick succession to toggle debug overlay
+    // for users who can't edit the URL on mobile.
+    let _gearTaps = 0, _gearLast = 0;
+    document.getElementById('settingsBtn').addEventListener('click', () => {
+      const now = Date.now();
+      _gearTaps = (now - _gearLast < 700) ? _gearTaps + 1 : 1;
+      _gearLast = now;
+      if (_gearTaps >= 5) {
+        _gearTaps = 0;
+        dbgPanel.style.display = dbgPanel.style.display === 'none' ? 'block' : 'none';
+      }
+    });
+    window.mttydDebug = {
+      show: () => { dbgPanel.style.display = 'block'; },
+      hide: () => { dbgPanel.style.display = 'none'; },
+      log: () => window._mttydInputLog,
     };
     renderTabBar();
     setActive(0);

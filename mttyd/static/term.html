@@ -121,6 +121,28 @@
     #settings .done { width: 100%; margin-top: 12px; background: #6366f1;
                       color: white; border: 0; padding: 10px;
                       border-radius: 6px; font-weight: 600; }
+    /* Paste fallback modal — used when navigator.clipboard.readText fails,
+       which happens on HTTP (non-secure-context) connections. User pastes
+       via the OS keyboard's long-press menu, then taps Send. */
+    #paster { display: none; position: fixed; inset: 0; z-index: 10;
+              background: rgba(0,0,0,0.7); align-items: center;
+              justify-content: center; padding: 16px; }
+    #paster.on { display: flex; }
+    #paster .panel { background: #0f172a; border: 1px solid #1e293b;
+                     border-radius: 8px; padding: 16px; max-width: 480px;
+                     width: 100%; font-size: 14px; }
+    #paster h2 { margin: 0 0 4px 0; font-size: 16px; }
+    #paster .hint { color: #94a3b8; font-size: 12px; margin-bottom: 8px; }
+    #paster textarea { width: 100%; box-sizing: border-box; min-height: 100px;
+                       background: #1e293b; color: #e2e8f0;
+                       border: 1px solid #334155; border-radius: 4px;
+                       padding: 6px; font-family: ui-monospace, Menlo, monospace;
+                       font-size: 13px; }
+    #paster .row { display: flex; gap: 8px; margin-top: 12px; }
+    #paster .row button { flex: 1; padding: 10px; border: 0;
+                          border-radius: 6px; font-weight: 600; font-size: 14px; }
+    #paster .send { background: #6366f1; color: white; }
+    #paster .cancel { background: #334155; color: #e2e8f0; }
   </style>
 </head>
 <body>
@@ -149,6 +171,17 @@
     <button class="keybtn" data-seq="\t"     data-seq-long="\x1b[Z">Tab</button>
     <button class="keybtn" data-seq="\x1b">Esc</button>
     <button class="keybtn" data-seq="\x03"   data-seq-long="\x04">^C</button>
+  </div>
+  <div id="paster">
+    <div class="panel">
+      <h2>Paste</h2>
+      <div class="hint">Long-press the box below and pick "Paste" from your keyboard, then tap Send.</div>
+      <textarea id="pasterText" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+      <div class="row">
+        <button class="cancel" id="pasterCancel">Cancel</button>
+        <button class="send" id="pasterSend">Send</button>
+      </div>
+    </div>
   </div>
   <div id="settings">
     <div class="panel">
@@ -231,18 +264,134 @@
         .replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\n/g, '\n');
     }
 
-    // Gboard predictive-text fix on every xterm helper textarea.
+    // Mobile keyboard fix on every xterm helper textarea.
+    // NOTE: inputmode is deliberately left unset (defaults to "text") so
+    // that Gboard enters composition mode. With composition, xterm.js
+    // buffers keystrokes and sends the final word on compositionend —
+    // which means tapping an autocorrect suggestion Just Works.
+    // inputmode="url" was previously used to suppress the prediction bar,
+    // but it broke composition and caused autocorrect to append instead
+    // of replace.  autocorrect="off" prevents unwanted auto-insertions
+    // on space while still allowing the user to deliberately tap suggestions.
     const HELPER_ATTRS = {
       autocomplete: 'off', autocorrect: 'off', autocapitalize: 'none',
-      spellcheck: 'false', inputmode: 'url',
+      spellcheck: 'false',
+      inputmode: 'url',           // strictest "no autocorrect" hint on Android
       'data-gramm': 'false', 'data-gramm_editor': 'false',
     };
+    // _locking flag breaks the observer-fires-on-our-own-setAttribute loop
+    // that would happen if we observed attribute mutations as well as
+    // childList. We DO want to observe attribute mutations (xterm.js
+    // resets inputmode= after we set it, for example), and the flag lets
+    // us re-set without retriggering ourselves.
+    let _lockingHelperAttrs = false;
     function lockHelperAttrs() {
-      document.querySelectorAll('.xterm-helper-textarea').forEach(h => {
-        for (const [k, v] of Object.entries(HELPER_ATTRS)) {
-          if (h.getAttribute(k) !== v) h.setAttribute(k, v);
-        }
+      if (_lockingHelperAttrs) return;
+      _lockingHelperAttrs = true;
+      try {
+        document.querySelectorAll('.xterm-helper-textarea').forEach(h => {
+          for (const [k, v] of Object.entries(HELPER_ATTRS)) {
+            if (h.getAttribute(k) !== v) h.setAttribute(k, v);
+          }
+        });
+      } finally {
+        _lockingHelperAttrs = false;
+      }
+    }
+
+    // Mobile autocorrect fix.
+    //
+    // xterm.js + Gboard has two bugs:
+    //  1. Chars leak through onData DURING composition (before compositionend).
+    //  2. After compositionend, a redundant `input` event fires and xterm.js
+    //     processes it as a second diff (e.g. "teting"→"testing" produces
+    //     extra "sting").
+    //
+    // Fix:
+    //  - Track everything xterm.js sends via onData during composition.
+    //  - On compositionend (bubble phase, after xterm.js), compare the
+    //    effective input with e.data and send DEL + correct text if wrong.
+    //  - Suppress the redundant input event that follows compositionend
+    //    (capture phase, before xterm.js sees it).
+    const _hooked = new WeakSet();
+    function hookAutoCorrect(term, ws) {
+      const ta = term.textarea;
+      if (!ta || _hooked.has(ta)) return;
+      _hooked.add(ta);
+
+      let inComp = false;
+      let compSent = '';        // raw chars from onData during composition
+      let suppressInput = false;
+
+      // Accumulate everything xterm.js sends during composition.
+      term.onData(d => { if (inComp) compSent += d; });
+
+      ta.addEventListener('compositionstart', () => {
+        inComp = true;
+        compSent = '';
       });
+
+      // Bubble phase (runs AFTER xterm.js's compositionend handler which
+      // fires onData synchronously). By now compSent has all leaked chars
+      // + whatever compositionend produced.
+      ta.addEventListener('compositionend', (e) => {
+        inComp = false;
+        suppressInput = true;
+        setTimeout(() => { suppressInput = false; }, 100); // safety reset
+
+        const desired = e.data || '';
+        if (!desired) { compSent = ''; return; }
+
+        // Compute effective input: printable chars minus DELs/backspaces.
+        let effective = '';
+        for (const ch of compSent) {
+          const c = ch.charCodeAt(0);
+          if (c === 0x7f || c === 0x08) effective = effective.slice(0, -1);
+          else if (c >= 32) effective += ch;
+        }
+
+        if (effective !== desired) {
+          const del = '\x7f'.repeat(effective.length);
+          if (ws.readyState === WebSocket.OPEN) {
+            sendWs(ws, '0', del + desired);
+          }
+        }
+        compSent = '';
+      });
+
+      // Capture phase: suppress the input event that fires right after
+      // compositionend — it causes xterm.js to compute a redundant diff
+      // (e.g. "sting" from textarea "teting"→"testing").
+      ta.addEventListener('input', (e) => {
+        if (suppressInput) {
+          suppressInput = false;
+          e.stopImmediatePropagation();
+        }
+      }, true);
+
+      // Spellcheck tap on already-committed text (no composition).
+      ta.addEventListener('beforeinput', (e) => {
+        if (e.inputType !== 'insertReplacementText') return;
+        let replacement = '';
+        try { replacement = e.dataTransfer.getData('text/plain'); } catch (_) {}
+        if (!replacement) replacement = e.data || '';
+        if (!replacement) return;
+
+        e.preventDefault();
+        e.stopImmediatePropagation();
+
+        let deleteCount = 0;
+        try {
+          const ranges = e.getTargetRanges();
+          if (ranges.length > 0)
+            deleteCount = ranges[0].endOffset - ranges[0].startOffset;
+        } catch (_) {}
+        if (deleteCount === 0) deleteCount = ta.value.length;
+
+        const del = '\x7f'.repeat(deleteCount);
+        if (ws.readyState === WebSocket.OPEN) sendWs(ws, '0', del + replacement);
+        ta.value = '';
+      }, true);
     }
 
     // Wake Lock — released when tab is hidden, re-acquired when visible.
@@ -298,6 +447,11 @@
         fontFamily: 'Consolas, Menlo, Monaco, "Courier New", monospace',
         cursorBlink: true, scrollback: 100000,
         theme: THEMES[settings.theme] || THEMES.dark,
+        // SearchAddon's match-highlighting decorations are flagged as
+        // proposed API in xterm.js — without this flag, findNext runs
+        // silently with no visible highlight, which looks like "search
+        // doesn't work".
+        allowProposedApi: true,
       });
       const fit    = new window.FitAddon.FitAddon();
       const search = new window.SearchAddon.SearchAddon();
@@ -345,6 +499,7 @@
         }
       };
       term.onData(d => { if (ws.readyState === WebSocket.OPEN) sendWs(ws, '0', d); });
+      hookAutoCorrect(term, ws);
 
       function doResize() {
         if (wrap.classList.contains('hidden')) return;   // skip background tabs
@@ -586,7 +741,13 @@
       }
     }
     lockHelperAttrs();
-    new MutationObserver(lockHelperAttrs).observe(document.body, { childList: true, subtree: true });
+    // Observe BOTH new elements AND attribute changes on our locked attrs.
+    // xterm.js or browser quirks can clear inputmode etc. after we set it,
+    // so we need to re-apply on attribute mutation, not just element churn.
+    new MutationObserver(lockHelperAttrs).observe(document.body, {
+      childList: true, subtree: true,
+      attributes: true, attributeFilter: Object.keys(HELPER_ATTRS),
+    });
     renderTabBar();
     setActive(0);
 
@@ -663,7 +824,14 @@
       document.getElementById('keybar').classList.toggle('off', !settings.keybar);
       renderSnippets();
       if (settings.wakeLock) acquireWakeLock(); else releaseWakeLock();
-      sessions.forEach(s => s.resize());
+      // Defer the refit by two animation frames so xterm.js has time to
+      // re-measure cell width/height at the new fontSize. Calling fit.fit()
+      // synchronously here picks up stale cell metrics → terminal claims
+      // 80 cols when only 30 actually fit → output runs off the right edge
+      // without wrapping. Same fix helps theme changes.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        sessions.forEach(s => s.resize());
+      }));
     }
     applySettings();
 
@@ -769,13 +937,35 @@
       const text = t.getSelection() || visibleText(t);
       if (await copyText(text)) flashCopy(document.getElementById('copyBtn'));
     });
-    document.getElementById('pasteBtn').addEventListener('click', async () => {
-      let text = '';
-      try { text = await navigator.clipboard.readText(); }
-      catch (_) { /* permissions/blocked: nothing we can do for paste */ }
+    // Paste: try the modern Clipboard API first. If that fails (non-HTTPS
+    // context, permission denied, empty, etc.), open the fallback modal so
+    // the user can paste via the OS keyboard and tap Send.
+    function sendToActive(text) {
       if (!text) return;
       const s = active();
       if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', text);
+    }
+    const paster = document.getElementById('paster');
+    const pasterText = document.getElementById('pasterText');
+    function openPaster() {
+      pasterText.value = '';
+      paster.classList.add('on');
+      setTimeout(() => pasterText.focus(), 50);
+    }
+    function closePaster() { paster.classList.remove('on'); }
+    document.getElementById('pasterCancel').addEventListener('click', closePaster);
+    document.getElementById('pasterSend').addEventListener('click', () => {
+      sendToActive(pasterText.value);
+      closePaster();
+    });
+    paster.addEventListener('click', e => { if (e.target === paster) closePaster(); });
+
+    document.getElementById('pasteBtn').addEventListener('click', async () => {
+      let text = '';
+      try { text = await navigator.clipboard.readText(); }
+      catch (_) { /* Clipboard API blocked (e.g. HTTP context) — fall through */ }
+      if (text) { sendToActive(text); return; }
+      openPaster();
     });
   </script>
 </body>

@@ -530,6 +530,20 @@
       session._echoSkip = 0;
       term.onData(d => {
         if (ws.readyState !== WebSocket.OPEN) return;
+
+        // Autocorrect backstop. Paste, keybar snippets, and the
+        // composition-fix path all call sendWs directly — they don't
+        // come through term.onData. So anything multi-char arriving
+        // here is virtually always a Gboard "insertText with the
+        // diff" event that slipped past the beforeinput guard.
+        // Real keystrokes are always 1 char per onData call.
+        if (d.length > 1 && /^[A-Za-z]/.test(d)) {
+          window._mttydWsLog.push('[onData-blocked] ' + JSON.stringify(d));
+          if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
+          try { if (term.textarea) term.textarea.value = ''; } catch (_) {}
+          return;
+        }
+
         sendWs(ws, '0', d);
         // Only locally echo plain printable chars. Anything multi-char or
         // with control codes goes through unechoed (no point guessing what

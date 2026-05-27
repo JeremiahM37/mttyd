@@ -51,11 +51,41 @@ tmux set-environment -gu CLAUDE_CODE_SSE_PORT  2>/dev/null
 tmux set-environment -gu CLAUDE_CODE_ENTRYPOINT 2>/dev/null
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux capture-pane -p -t "$SESSION" -S -100000 -E -1 2>/dev/null
+    # -J joins any tmux-wrapped lines so xterm.js can re-wrap them at its own
+    # width. Without -J, a long line tmux wrapped at 80 cols stays hard-broken
+    # if the new client is 40 cols wide → garbled / overlapping rendering.
+    tmux capture-pane -p -J -t "$SESSION" -S -100000 -E -1 2>/dev/null
 fi
 # Belt-and-suspenders: also `unset CLAUDECODE` inside the bash that actually
 # exec()s claude — covers the case where the tmux server env scrub above
 # raced or somehow didn't take.
+# Inner respawn loop:
+#  - Each iteration checks if claude has a saved conversation for this workdir
+#    (anything under ~/.claude/projects/<encoded-cwd>/*.jsonl). If so, launch
+#    with --continue to auto-resume; otherwise launch fresh. This way the
+#    user's conversation survives WS drops, phone-screen-blanks, and any other
+#    cause of the inner claude exiting — no more manual /resume after a
+#    disconnect.
+#  - --continue on a fresh workdir exits with "No conversation found", so
+#    we have to gate on the .jsonl existence check or the loop spins on that
+#    error indefinitely.
 exec tmux new-session -A -s "$SESSION" -c "$WORKDIR" -- \
-    bash -c 'unset CLAUDECODE CLAUDE_CODE_SSE_PORT CLAUDE_CODE_ENTRYPOINT; while true; do "$@"; status=$?; echo; echo "[pwa-claude-tmux] claude exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."; read -t 5 -n 1 && continue || echo "auto-restarting in 1s..."; sleep 1; done' \
-    -- claude --dangerously-skip-permissions
+    bash -c '
+        unset CLAUDECODE CLAUDE_CODE_SSE_PORT CLAUDE_CODE_ENTRYPOINT
+        # Claude encodes the cwd as path with every non-alphanumeric char → "-".
+        # E.g. /home/admin/.claude-sessions/claude-2 → -home-admin--claude-sessions-claude-2
+        PROJ_KEY=$(pwd | sed "s|[^a-zA-Z0-9-]|-|g")
+        while true; do
+            if compgen -G "$HOME/.claude/projects/$PROJ_KEY/*.jsonl" >/dev/null 2>&1; then
+                claude --continue --dangerously-skip-permissions
+            else
+                claude --dangerously-skip-permissions
+            fi
+            status=$?
+            echo
+            echo "[pwa-claude-tmux] claude exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."
+            read -t 5 -n 1 && continue
+            echo "auto-restarting in 1s..."
+            sleep 1
+        done
+    '

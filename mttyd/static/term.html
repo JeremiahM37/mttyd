@@ -352,11 +352,16 @@
           else if (c >= 32) effective += ch;
         }
 
+        // If effective !== desired, the IME wants to "fix" what was
+        // typed. For a terminal we ALWAYS want the literal keystrokes —
+        // applying the correction would replace "teting" with "testing"
+        // by sending backspaces + new text, which is exactly the bug
+        // the user keeps hitting. Drop the correction; the shell
+        // already received `effective` via per-char onData during
+        // composition, which is what the user actually typed.
         if (effective !== desired) {
-          const del = '\x7f'.repeat(effective.length);
-          if (ws.readyState === WebSocket.OPEN) {
-            sendWs(ws, '0', del + desired);
-          }
+          window._mttydWsLog.push('[compEnd-blocked] eff=' + JSON.stringify(effective) + ' desired=' + JSON.stringify(desired));
+          if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
         }
         compSent = '';
       });
@@ -520,63 +525,29 @@
           overlay.classList.add('on');
         }
       };
-      // Local-echo: render the typed character to xterm immediately so the
-      // user sees it without waiting for the server round-trip. Track what
-      // we've pre-echoed so we can swallow the server's echo when it comes
-      // back. Falls back gracefully on multi-char or control sequences.
-      // Without this, a 600ms RTT (plane wifi, mobile cell) makes every
-      // keystroke feel laggy by exactly that delay.
-      session._echoQueue = '';
-      session._echoSkip = 0;
+      // term.onData is the single ws output path for keystrokes.
+      // Autocorrect backstop: paste/keybar/snippets/composition-fix all
+      // call sendWs directly; anything multi-char arriving via onData is
+      // virtually always a Gboard "insertText with the diff" event.
+      // Real keystrokes are always 1 char per onData call.
       term.onData(d => {
         if (ws.readyState !== WebSocket.OPEN) return;
-
-        // Autocorrect backstop. Paste, keybar snippets, and the
-        // composition-fix path all call sendWs directly — they don't
-        // come through term.onData. So anything multi-char arriving
-        // here is virtually always a Gboard "insertText with the
-        // diff" event that slipped past the beforeinput guard.
-        // Real keystrokes are always 1 char per onData call.
+        // Log every onData call so the debug overlay can show the gap
+        // between "input event fired" and "data hit the wire".
+        window._mttydInputLog.push({
+          evt: 'onData', inputType: '(xterm)', data: d, len: d.length,
+          blocked: (d.length > 1 && /^[A-Za-z]/.test(d)),
+          ts: Date.now(),
+        });
+        if (window._mttydInputLog.length > 200) window._mttydInputLog.splice(0, 100);
         if (d.length > 1 && /^[A-Za-z]/.test(d)) {
           window._mttydWsLog.push('[onData-blocked] ' + JSON.stringify(d));
           if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
           try { if (term.textarea) term.textarea.value = ''; } catch (_) {}
           return;
         }
-
         sendWs(ws, '0', d);
-        // Only locally echo plain printable chars. Anything multi-char or
-        // with control codes goes through unechoed (no point guessing what
-        // a shell will do with arrows/backspace/etc.).
-        if (d.length === 1 && d.charCodeAt(0) >= 0x20 && d.charCodeAt(0) < 0x7f) {
-          term.write(d);
-          session._echoQueue += d;
-        }
       });
-
-      // Wrap term.write so we can swallow the server echo for chars we
-      // already painted locally. Only matches when the incoming chunk
-      // starts with our queued prefix.
-      const _origWrite = term.write.bind(term);
-      term.write = (chunk) => {
-        if (typeof chunk === 'string' && session._echoQueue) {
-          let q = session._echoQueue;
-          let idx = 0;
-          // Skip past any prefix of `chunk` that exactly matches `q`. This
-          // is conservative: if the server inserts ANY control sequence
-          // before the echo (cursor moves, prompts, etc.), we stop trying.
-          while (idx < chunk.length && q.length > 0 && chunk[idx] === q[0]) {
-            idx++; q = q.slice(1);
-          }
-          // If we successfully consumed some of the queue, write only the rest.
-          if (idx > 0) {
-            session._echoQueue = q;
-            chunk = chunk.slice(idx);
-            if (!chunk) return;
-          }
-        }
-        return _origWrite(chunk);
-      };
       hookAutoCorrect(term, ws);
 
       function doResize() {

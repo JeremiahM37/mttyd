@@ -294,29 +294,7 @@
           for (const [k, v] of Object.entries(HELPER_ATTRS)) {
             if (h.getAttribute(k) !== v) h.setAttribute(k, v);
           }
-          // Last-line defense: when the user taps an autocorrect suggestion,
-          // Gboard ignores our autocomplete=off/inputmode=url hints and
-          // fires input events with inputType=insertReplacementText (and
-          // related). xterm.js v5's input handler mis-applies these,
-          // producing "tetingsting"-style garbled output. We swallow them
-          // in the capture phase so xterm.js never sees the corrupted event.
-          if (!_autocorrectGuardedTextareas.has(h)) {
-            _autocorrectGuardedTextareas.add(h);
-            const BLOCKED_INPUT_TYPES = new Set([
-              'insertReplacementText', 'insertFromComposition',
-              'insertFromYank', 'insertFromDrop', 'insertFromPaste',
-              'insertFromPasteAsQuotation',
-            ]);
-            const eat = (e) => {
-              if (e.inputType && BLOCKED_INPUT_TYPES.has(e.inputType)) {
-                e.stopImmediatePropagation();
-                if (e.cancelable) e.preventDefault();
-                h.value = '';   // also wipe so any read-after path sees nothing
-              }
-            };
-            h.addEventListener('beforeinput', eat, { capture: true });
-            h.addEventListener('input',       eat, { capture: true });
-          }
+          // (autocorrect guard is installed once at document level — see below)
         });
       } finally {
         _lockingHelperAttrs = false;
@@ -436,7 +414,24 @@
     // '2' would be PAUSE and the inner command never spawns.
     const enc = new TextEncoder();
     const dec = new TextDecoder('utf-8');
+    // Dedup window — when xterm.js fires both an input event AND a separate
+    // compositionend handler for the same Gboard autocorrect commit, it
+    // emits the same text twice. Tracks last input write per ws and drops
+    // back-to-back identical sends within 500ms. Sized so that legitimate
+    // double-typing (which would have to be inside 500ms AND identical) is
+    // very rare while autocorrect dups (~10ms apart) are caught.
+    const _lastInputWrite = new WeakMap();
     function sendWs(ws, prefix, payload) {
+      if (prefix === '0') {
+        const last = _lastInputWrite.get(ws);
+        const now  = Date.now();
+        if (last && last.text === payload && (now - last.ts) < 500) {
+          // Drop the duplicate — preserves the typed chars in PTY without
+          // the second copy that xterm.js's compositionend handler adds.
+          return;
+        }
+        _lastInputWrite.set(ws, { text: payload, ts: now });
+      }
       const body = enc.encode(payload);
       const buf  = new Uint8Array(body.length + 1);
       buf[0] = prefix.charCodeAt(0);
@@ -765,13 +760,53 @@
       }
     }
     lockHelperAttrs();
-    // Observe BOTH new elements AND attribute changes on our locked attrs.
-    // xterm.js or browser quirks can clear inputmode etc. after we set it,
-    // so we need to re-apply on attribute mutation, not just element churn.
     new MutationObserver(lockHelperAttrs).observe(document.body, {
       childList: true, subtree: true,
       attributes: true, attributeFilter: Object.keys(HELPER_ATTRS),
     });
+
+    // Autocorrect guard — installed once at document level so it fires in
+    // capture phase BEFORE any xterm.js listener on the helper textarea,
+    // regardless of registration order. We DENYLIST the input-event types
+    // that cause the "tetingsting" class of bug (Gboard autocorrect
+    // replacement, paste-replace) and let everything else through —
+    // crucially `insertCompositionText` which Gboard uses for normal typing.
+    window._mttydInputLog = [];
+    function isHelperTextarea(el) {
+      return el && el.classList && el.classList.contains('xterm-helper-textarea');
+    }
+    const BLOCKED_INPUT_TYPES = new Set([
+      'insertReplacementText',     // tap-an-autocorrect-suggestion
+      'insertFromComposition',     // some Gboard variants fire this on commit
+      'insertFromPaste',           // OS paste through helper textarea
+      'insertFromPasteAsQuotation',
+      'insertFromYank',            // macOS yank
+      'insertFromDrop',            // drag-drop into the textarea
+    ]);
+    function autocorrectGuard(e) {
+      if (!isHelperTextarea(e.target)) return;
+      const it = e.inputType || '(none)';
+      const data = typeof e.data === 'string' ? e.data : null;
+      const blocked = BLOCKED_INPUT_TYPES.has(it);
+      window._mttydInputLog.push({
+        evt: e.type, inputType: it, data, len: data ? data.length : 0,
+        blocked, ts: Date.now(),
+      });
+      // Keep log bounded
+      if (window._mttydInputLog.length > 200) window._mttydInputLog.splice(0, 100);
+      if (blocked) {
+        e.stopImmediatePropagation();
+        if (e.cancelable) e.preventDefault();
+        try { e.target.value = ''; } catch (_) {}
+      }
+    }
+    document.addEventListener('beforeinput', autocorrectGuard, { capture: true });
+    document.addEventListener('input',       autocorrectGuard, { capture: true });
+    window.dumpInputLog = () => {
+      console.log('=== mttyd input log (' + window._mttydInputLog.length + ' events) ===');
+      window._mttydInputLog.forEach(e => console.log(JSON.stringify(e)));
+      return window._mttydInputLog;
+    };
     renderTabBar();
     setActive(0);
 

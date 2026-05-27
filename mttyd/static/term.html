@@ -285,6 +285,7 @@
     // resets inputmode= after we set it, for example), and the flag lets
     // us re-set without retriggering ourselves.
     let _lockingHelperAttrs = false;
+    const _autocorrectGuardedTextareas = new WeakSet();
     function lockHelperAttrs() {
       if (_lockingHelperAttrs) return;
       _lockingHelperAttrs = true;
@@ -292,6 +293,29 @@
         document.querySelectorAll('.xterm-helper-textarea').forEach(h => {
           for (const [k, v] of Object.entries(HELPER_ATTRS)) {
             if (h.getAttribute(k) !== v) h.setAttribute(k, v);
+          }
+          // Last-line defense: when the user taps an autocorrect suggestion,
+          // Gboard ignores our autocomplete=off/inputmode=url hints and
+          // fires input events with inputType=insertReplacementText (and
+          // related). xterm.js v5's input handler mis-applies these,
+          // producing "tetingsting"-style garbled output. We swallow them
+          // in the capture phase so xterm.js never sees the corrupted event.
+          if (!_autocorrectGuardedTextareas.has(h)) {
+            _autocorrectGuardedTextareas.add(h);
+            const BLOCKED_INPUT_TYPES = new Set([
+              'insertReplacementText', 'insertFromComposition',
+              'insertFromYank', 'insertFromDrop', 'insertFromPaste',
+              'insertFromPasteAsQuotation',
+            ]);
+            const eat = (e) => {
+              if (e.inputType && BLOCKED_INPUT_TYPES.has(e.inputType)) {
+                e.stopImmediatePropagation();
+                if (e.cancelable) e.preventDefault();
+                h.value = '';   // also wipe so any read-after path sees nothing
+              }
+            };
+            h.addEventListener('beforeinput', eat, { capture: true });
+            h.addEventListener('input',       eat, { capture: true });
           }
         });
       } finally {

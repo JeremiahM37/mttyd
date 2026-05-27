@@ -429,14 +429,21 @@
     window._mttydWsLog = [];
     function sendWs(ws, prefix, payload) {
       if (prefix === '0') {
-        const last = _lastInputWrite.get(ws);
-        const now  = Date.now();
-        if (last && last.text === payload && (now - last.ts) < 500) {
-          window._mttydWsLog.push('[dup-dropped] ' + payload);
-          if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
-          return;
+        // Only dedup MULTI-char identical payloads within a tight window —
+        // single-char repeats are legitimate key-repeat (hold backspace,
+        // hold arrow, repeat letter). The dedup was originally added for
+        // the autocorrect compositionend double-fire which sends the same
+        // multi-char string twice ~10ms apart; restrict to that case.
+        if (payload.length > 1) {
+          const last = _lastInputWrite.get(ws);
+          const now  = Date.now();
+          if (last && last.text === payload && (now - last.ts) < 100) {
+            window._mttydWsLog.push('[dup-dropped] ' + payload);
+            if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
+            return;
+          }
+          _lastInputWrite.set(ws, { text: payload, ts: now });
         }
-        _lastInputWrite.set(ws, { text: payload, ts: now });
         window._mttydWsLog.push(payload);
         if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
       }

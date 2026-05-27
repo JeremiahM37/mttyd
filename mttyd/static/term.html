@@ -520,7 +520,49 @@
           overlay.classList.add('on');
         }
       };
-      term.onData(d => { if (ws.readyState === WebSocket.OPEN) sendWs(ws, '0', d); });
+      // Local-echo: render the typed character to xterm immediately so the
+      // user sees it without waiting for the server round-trip. Track what
+      // we've pre-echoed so we can swallow the server's echo when it comes
+      // back. Falls back gracefully on multi-char or control sequences.
+      // Without this, a 600ms RTT (plane wifi, mobile cell) makes every
+      // keystroke feel laggy by exactly that delay.
+      session._echoQueue = '';
+      session._echoSkip = 0;
+      term.onData(d => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        sendWs(ws, '0', d);
+        // Only locally echo plain printable chars. Anything multi-char or
+        // with control codes goes through unechoed (no point guessing what
+        // a shell will do with arrows/backspace/etc.).
+        if (d.length === 1 && d.charCodeAt(0) >= 0x20 && d.charCodeAt(0) < 0x7f) {
+          term.write(d);
+          session._echoQueue += d;
+        }
+      });
+
+      // Wrap term.write so we can swallow the server echo for chars we
+      // already painted locally. Only matches when the incoming chunk
+      // starts with our queued prefix.
+      const _origWrite = term.write.bind(term);
+      term.write = (chunk) => {
+        if (typeof chunk === 'string' && session._echoQueue) {
+          let q = session._echoQueue;
+          let idx = 0;
+          // Skip past any prefix of `chunk` that exactly matches `q`. This
+          // is conservative: if the server inserts ANY control sequence
+          // before the echo (cursor moves, prompts, etc.), we stop trying.
+          while (idx < chunk.length && q.length > 0 && chunk[idx] === q[0]) {
+            idx++; q = q.slice(1);
+          }
+          // If we successfully consumed some of the queue, write only the rest.
+          if (idx > 0) {
+            session._echoQueue = q;
+            chunk = chunk.slice(idx);
+            if (!chunk) return;
+          }
+        }
+        return _origWrite(chunk);
+      };
       hookAutoCorrect(term, ws);
 
       function doResize() {
@@ -792,14 +834,23 @@
       const data = typeof e.data === 'string' ? e.data : null;
       // Block:
       //  (a) known-bad input types (paste-replace, yank, drop, etc.)
-      //  (b) plain insertText whose data is multi-char — that's Gboard's
-      //      "autocorrect via insertText with the diff" pattern, which
-      //      produces 'tetingsting' (typed prefix kept + corrected suffix
-      //      appended). Legitimate single-char typing fires insertText
-      //      with data.length === 1 and is allowed through.
-      const multiCharInsertText =
-        (it === 'insertText') && data && data.length > 1;
-      const blocked = BLOCKED_INPUT_TYPES.has(it) || multiCharInsertText;
+      //  (b) insertText whose data is multi-char AND fires within 500ms
+      //      after typing — that's Gboard's "autocorrect via diff" pattern
+      //      (after typing "teting", a single insertText fires with data
+      //      "sting "). Legitimate typing fires single-char events.
+      //      The time window means apps that batch multi-char input
+      //      legitimately (e.g. CJK IMEs committing a word) still work
+      //      if there's a pause before the batch.
+      const now = Date.now();
+      const tail = window._mttydInputLog.slice(-6);
+      const recentSingleCharCount = tail.filter(
+        ev => ev.evt === 'input' && ev.inputType === 'insertText'
+              && ev.len === 1 && (now - ev.ts) < 700
+      ).length;
+      const lookSLikeAutocorrectDiff =
+        it === 'insertText' && data && data.length > 1
+        && recentSingleCharCount >= 2;   // had recent per-char typing
+      const blocked = BLOCKED_INPUT_TYPES.has(it) || lookSLikeAutocorrectDiff;
       window._mttydInputLog.push({
         evt: e.type, inputType: it, data, len: data ? data.length : 0,
         blocked, ts: Date.now(),

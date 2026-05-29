@@ -352,16 +352,15 @@
           else if (c >= 32) effective += ch;
         }
 
-        // If effective !== desired, the IME wants to "fix" what was
-        // typed. For a terminal we ALWAYS want the literal keystrokes —
-        // applying the correction would replace "teting" with "testing"
-        // by sending backspaces + new text, which is exactly the bug
-        // the user keeps hitting. Drop the correction; the shell
-        // already received `effective` via per-char onData during
-        // composition, which is what the user actually typed.
+        // CJK / composition-mode autocorrect: chars leaked per-keystroke
+        // during composition (compSent = effective), final committed text
+        // is desired. If they differ, the IME applied an autocorrect:
+        // back-space what leaked and type the committed text instead.
         if (effective !== desired) {
-          window._mttydWsLog.push('[compEnd-blocked] eff=' + JSON.stringify(effective) + ' desired=' + JSON.stringify(desired));
-          if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
+          const del = '\x7f'.repeat(effective.length);
+          if (ws.readyState === WebSocket.OPEN) {
+            sendWs(ws, '0', del + desired);
+          }
         }
         compSent = '';
       });
@@ -376,29 +375,10 @@
         }
       }, true);
 
-      // Spellcheck tap on already-committed text (no composition).
-      ta.addEventListener('beforeinput', (e) => {
-        if (e.inputType !== 'insertReplacementText') return;
-        let replacement = '';
-        try { replacement = e.dataTransfer.getData('text/plain'); } catch (_) {}
-        if (!replacement) replacement = e.data || '';
-        if (!replacement) return;
-
-        e.preventDefault();
-        e.stopImmediatePropagation();
-
-        let deleteCount = 0;
-        try {
-          const ranges = e.getTargetRanges();
-          if (ranges.length > 0)
-            deleteCount = ranges[0].endOffset - ranges[0].startOffset;
-        } catch (_) {}
-        if (deleteCount === 0) deleteCount = ta.value.length;
-
-        const del = '\x7f'.repeat(deleteCount);
-        if (ws.readyState === WebSocket.OPEN) sendWs(ws, '0', del + replacement);
-        ta.value = '';
-      }, true);
+      // Note: insertReplacementText and insertText-with-targetRange are
+      // handled at the document level by autocorrectGuard, which has
+      // access to all sessions and runs in capture phase before xterm's
+      // own listeners. Per-element handler is redundant.
     }
 
     // Wake Lock — released when tab is hidden, re-acquired when visible.
@@ -533,26 +513,21 @@
         }
       };
       // term.onData is the single ws output path for keystrokes.
-      // Autocorrect backstop: paste/keybar/snippets/composition-fix all
-      // call sendWs directly; anything multi-char arriving via onData is
-      // virtually always a Gboard "insertText with the diff" event.
-      // Real keystrokes are always 1 char per onData call.
+      // The autocorrect handling happens earlier — at the beforeinput
+      // capture phase via autocorrectGuard, which translates explicit
+      // replacement events into "backspaces + new text" sent directly
+      // to the PTY. By the time data reaches here, it's either:
+      //   - a single keystroke (typing, backspace, control)
+      //   - multi-char data from a legitimate path (delete+insert
+      //     autocorrect sequences from Gboard, swipe typing, etc.)
+      // In both cases pass through.
       term.onData(d => {
         if (ws.readyState !== WebSocket.OPEN) return;
-        // Log every onData call so the debug overlay can show the gap
-        // between "input event fired" and "data hit the wire".
         window._mttydInputLog.push({
           evt: 'onData', inputType: '(xterm)', data: d, len: d.length,
-          blocked: (d.length > 1 && /^[A-Za-z]/.test(d)),
-          ts: Date.now(),
+          blocked: false, ts: Date.now(),
         });
         if (window._mttydInputLog.length > 200) window._mttydInputLog.splice(0, 100);
-        if (d.length > 1 && /^[A-Za-z]/.test(d)) {
-          window._mttydWsLog.push('[onData-blocked] ' + JSON.stringify(d));
-          if (window._mttydWsLog.length > 80) window._mttydWsLog.splice(0, 40);
-          try { if (term.textarea) term.textarea.value = ''; } catch (_) {}
-          return;
-        }
         sendWs(ws, '0', d);
       });
       hookAutoCorrect(term, ws);
@@ -812,46 +787,113 @@
     function isHelperTextarea(el) {
       return el && el.classList && el.classList.contains('xterm-helper-textarea');
     }
-    const BLOCKED_INPUT_TYPES = new Set([
-      'insertReplacementText',     // tap-an-autocorrect-suggestion
-      'insertFromComposition',     // some Gboard variants fire this on commit
-      'insertFromPaste',           // OS paste through helper textarea
+    // Input types that should always be blocked from the helper textarea —
+    // these don't represent user typing intent and have no meaningful
+    // translation to a PTY (paste/yank/drop come through different paths).
+    const HARD_BLOCKED_INPUT_TYPES = new Set([
+      'insertFromPaste',
       'insertFromPasteAsQuotation',
-      'insertFromYank',            // macOS yank
-      'insertFromDrop',            // drag-drop into the textarea
+      'insertFromYank',
+      'insertFromDrop',
     ]);
+
+    // Track per-session which beforeinput events we've already translated
+    // ourselves, so we can suppress the matching `input` event that fires
+    // afterwards (otherwise xterm.js processes it too and we double-send).
+    const _handledByUs = new WeakMap();
+
+    function getSessionFromTarget(target) {
+      const wrap = target && target.closest && target.closest('.termWrap');
+      if (!wrap) return null;
+      return sessions.find(s => s.wrap === wrap) || null;
+    }
+
+    // Compute the delete-count for an autocorrect/replacement event. The
+    // InputEvent spec exposes this via getTargetRanges() — for an event
+    // that REPLACES text, the range has nonzero length and tells us
+    // exactly how many chars to back-space from the PTY's cursor.
+    function targetRangeDeleteCount(e) {
+      try {
+        const ranges = e.getTargetRanges();
+        if (!ranges || ranges.length === 0) return 0;
+        return Math.max(0, ranges[0].endOffset - ranges[0].startOffset);
+      } catch (_) { return 0; }
+    }
+
     function autocorrectGuard(e) {
       if (!isHelperTextarea(e.target)) return;
       const it = e.inputType || '(none)';
       const data = typeof e.data === 'string' ? e.data : null;
-      // Block:
-      //  (a) known-bad input types (paste-replace, yank, drop, etc.)
-      //  (b) insertText whose data is multi-char AND fires within 500ms
-      //      after typing — that's Gboard's "autocorrect via diff" pattern
-      //      (after typing "teting", a single insertText fires with data
-      //      "sting "). Legitimate typing fires single-char events.
-      //      The time window means apps that batch multi-char input
-      //      legitimately (e.g. CJK IMEs committing a word) still work
-      //      if there's a pause before the batch.
-      const now = Date.now();
-      const tail = window._mttydInputLog.slice(-6);
-      const recentSingleCharCount = tail.filter(
-        ev => ev.evt === 'input' && ev.inputType === 'insertText'
-              && ev.len === 1 && (now - ev.ts) < 700
-      ).length;
-      const lookSLikeAutocorrectDiff =
-        it === 'insertText' && data && data.length > 1
-        && recentSingleCharCount >= 2;   // had recent per-char typing
-      const blocked = BLOCKED_INPUT_TYPES.has(it) || lookSLikeAutocorrectDiff;
+      const delCount = targetRangeDeleteCount(e);
+
+      // Log everything for the debug overlay (?debug=1).
       window._mttydInputLog.push({
         evt: e.type, inputType: it, data, len: data ? data.length : 0,
-        blocked, ts: Date.now(),
+        del: delCount, blocked: false, ts: Date.now(),
       });
       if (window._mttydInputLog.length > 200) window._mttydInputLog.splice(0, 100);
-      if (blocked) {
+
+      // Hard-blocked types: paste/yank/drop. Drop entirely.
+      if (HARD_BLOCKED_INPUT_TYPES.has(it)) {
+        window._mttydInputLog[window._mttydInputLog.length - 1].blocked = true;
         e.stopImmediatePropagation();
         if (e.cancelable) e.preventDefault();
         try { e.target.value = ''; } catch (_) {}
+        return;
+      }
+
+      // Spell-check / autocorrect handling. Three signals can indicate
+      // "this is a replacement, not a fresh insertion":
+      //   1. inputType === 'insertReplacementText'  (explicit suggestion-tap)
+      //   2. inputType === 'insertText' with non-empty getTargetRanges()
+      //      (Gboard's "diff" autocorrect — replaces N chars with `data`)
+      //   3. inputType === 'insertFromComposition' with non-empty range
+      //
+      // For all three: translate to "del * N + data" and send directly to
+      // the PTY. Suppress the matching `input` event so xterm.js doesn't
+      // double-process.
+      const isReplacement =
+        it === 'insertReplacementText' ||
+        it === 'insertFromComposition' ||
+        (it === 'insertText' && delCount > 0);
+
+      if (isReplacement && e.type === 'beforeinput') {
+        // Resolve replacement text. dataTransfer for insertReplacementText,
+        // otherwise the event's .data.
+        let replacement = '';
+        if (e.dataTransfer) {
+          try { replacement = e.dataTransfer.getData('text/plain') || ''; } catch (_) {}
+        }
+        if (!replacement) replacement = data || '';
+        if (!replacement) return;
+
+        const session = getSessionFromTarget(e.target);
+        if (session && session.ws && session.ws.readyState === WebSocket.OPEN) {
+          // Use delCount from getTargetRanges; fall back to entire textarea
+          // length if the browser didn't populate it.
+          const n = delCount > 0 ? delCount : (e.target.value ? e.target.value.length : 0);
+          sendWs(session.ws, '0', '\x7f'.repeat(n) + replacement);
+        }
+        window._mttydInputLog[window._mttydInputLog.length - 1].blocked = true;
+        window._mttydInputLog[window._mttydInputLog.length - 1].handled = 'replaced';
+        e.stopImmediatePropagation();
+        if (e.cancelable) e.preventDefault();
+        _handledByUs.set(e.target, { it, data, ts: Date.now() });
+        try { e.target.value = ''; } catch (_) {}
+        return;
+      }
+
+      // Matching `input` event for something we already handled — drop it
+      // so xterm.js doesn't process the textarea-state change again.
+      if (e.type === 'input') {
+        const prev = _handledByUs.get(e.target);
+        if (prev && (Date.now() - prev.ts) < 200) {
+          _handledByUs.delete(e.target);
+          window._mttydInputLog[window._mttydInputLog.length - 1].blocked = true;
+          window._mttydInputLog[window._mttydInputLog.length - 1].handled = 'paired';
+          e.stopImmediatePropagation();
+          return;
+        }
       }
     }
     document.addEventListener('beforeinput', autocorrectGuard, { capture: true });

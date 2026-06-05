@@ -1,0 +1,78 @@
+# Verify the mttyd OSP itself — units, integration, ad-hoc UI.
+
+checks:
+  - name: tests
+    type: pytest
+    run: ".venv/bin/pytest -q"
+
+  # mttyd doesn't run as a system service in this repo (the OSP is a library);
+  # we depend on homelab-api serving its identical wrapper page for the UI
+  # check, since the page logic is what mttyd ships.
+
+  - name: term-page-via-homelab-api
+    type: http
+    targets:
+      - { url: "http://127.0.0.1:9105/term/7691",
+          status: 200,
+          contains: "createSession" }
+      - { url: "http://127.0.0.1:9105/term/7691,7691",
+          status: 200,
+          contains: "const PORTS = [7691, 7691]" }
+      - { url: "http://127.0.0.1:9105/term/notaport",
+          status: 400 }
+
+  - name: multi-tab-ui
+    type: ui
+    url: "http://127.0.0.1:9105/term/7691"
+    viewport: { width: 414, height: 896 }
+    steps:
+      - wait: ".xterm"
+      - sleep: 1.5                                    # let WS + capture-pane settle
+      - eval: "() => sessions.length === 1"
+      - eval: "() => typeof active === 'function'"    # tab-management API present
+      - expect_visible: "#tabAdd"                      # + button
+      - expect_visible: "#searchBtn"
+      - expect_visible: "#copyBtn"
+      - expect_visible: "#pasteBtn"
+      - expect_visible: "#settingsBtn"
+
+  # Regression guard for the lockHelperAttrs / MutationObserver infinite loop
+  # (homelab-v37, 2026-06-04): page returned 200 with correct HTML, but the
+  # JS pinned the renderer at 100% CPU before term.open() could run, so
+  # nothing visible ever appeared on mobile. Tight step_timeout means a
+  # CPU-pinned page fails fast instead of looking like a slow network.
+  - name: page-init-no-infinite-loop
+    type: ui
+    url: "http://127.0.0.1:9105/term/7691"
+    viewport: { width: 414, height: 896 }
+    step_timeout: 6
+    steps:
+      - wait: ".xterm"                                # xterm.open() must complete
+      - eval: |
+          () => {
+            if (typeof sessions === 'undefined') return { ok:false, detail:'sessions never declared — JS hung before tab init' };
+            if (sessions.length < 1) return { ok:false, detail:'sessions.length=0' };
+            const ws = sessions[0].ws;
+            if (!ws) return { ok:false, detail:'no ws on session 0' };
+            // ws.readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+            if (ws.readyState !== 1 && ws.readyState !== 0)
+              return { ok:false, detail:`ws.readyState=${ws.readyState} (expected OPEN or CONNECTING)` };
+            return { ok:true };
+          }
+      # If the MutationObserver/lockHelperAttrs loop were back, the input-log
+      # accumulator would not be running on a steady cadence — a real busy
+      # loop also blocks our setInterval renderers. Confirm setInterval ticks.
+      - eval: |
+          () => {
+            const t0 = performance.now();
+            return new Promise(res => {
+              setTimeout(() => {
+                const dt = performance.now() - t0;
+                // 250ms timer should fire within 600ms on a healthy page; a
+                // CPU-pinned event loop blocks it for much longer.
+                res(dt < 600
+                  ? { ok:true }
+                  : { ok:false, detail:`event loop stalled: 250ms timer took ${dt|0}ms` });
+              }, 250);
+            });
+          }

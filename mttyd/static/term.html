@@ -294,6 +294,15 @@
           for (const [k, v] of Object.entries(HELPER_ATTRS)) {
             if (h.getAttribute(k) !== v) h.setAttribute(k, v);
           }
+          // Explicit guarantee for the single most important attribute: with
+          // autocorrect on, Gboard's predictive strip double-inserts words.
+          // Conditional set is REQUIRED — setAttribute always queues a
+          // MutationObserver record (even for no-op changes), and the
+          // observer that's watching the helper textarea would then re-fire
+          // this function as a microtask after _lockingHelperAttrs resets,
+          // causing an infinite loop that pins a tab at 100% CPU and
+          // prevents the terminal from finishing init.
+          if (h.getAttribute('autocorrect') !== 'off') h.setAttribute('autocorrect', 'off');
           // (autocorrect guard is installed once at document level — see below)
         });
       } finally {

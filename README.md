@@ -185,9 +185,28 @@ pip install -e '.[test]'
 pytest
 ```
 
-For end-to-end coverage there's a Playwright script that drives a headless
-Chromium against a live mttyd, exercising every interactive feature; install
-playwright and `playwright install chromium` to run it.
+### Browser end-to-end (Playwright)
+
+`tests/test_e2e_playwright.py` drives a headless Chromium (via
+`pytest-playwright`) against a *real* mttyd server started on an ephemeral
+port — a throwaway WebSocket server stands in for ttyd so the page's per-tab
+socket actually connects. The tests assert the page renders xterm, boots
+exactly one session, exposes the tab-management API, shows the toolbar
+buttons, handles single/multi-port and invalid-port URLs, and — as a
+regression guard for the `lockHelperAttrs`/MutationObserver infinite loop —
+confirm the event loop isn't CPU-pinned at init (a 250 ms timer resolves
+promptly and session 0's WebSocket is OPEN/CONNECTING).
+
+They're tagged with the `e2e` marker and **deselected by default**, so the
+plain `pytest` run above stays fast and offline. To run them:
+
+```bash
+pip install -e '.[e2e]'
+playwright install chromium      # one-time browser download
+pytest -m e2e
+```
+
+(They load xterm.js from a CDN, so running them needs an internet connection.)
 
 ## License
 

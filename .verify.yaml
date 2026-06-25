@@ -1,4 +1,10 @@
-# Verify the mttyd OSP itself — units, integration, ad-hoc UI.
+# Verify the mttyd OSP itself — units, integration, headless-Chromium UI.
+#
+# Committed browser e2e coverage also lives in tests/test_e2e_playwright.py
+# (pytest-playwright). Those are tagged `e2e` and deselected by default, so the
+# `pytest -q` step below stays fast/offline; run them with `pytest -m e2e`
+# after `playwright install chromium`. The harness UI checks below additionally
+# exercise the identical wrapper page served live by homelab-api.
 
 checks:
   - name: tests

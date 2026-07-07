@@ -7,6 +7,10 @@ page: proper viewport, smooth touch scroll with momentum, a key bar for
 the arrows / Tab / Esc / Ctrl-C your phone keyboard hides, copy/paste,
 search through scrollback, themes, and a settings drawer to toggle it all.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="mttyd running in a phone browser: tab bar, Find/Copy/Paste toolbar, a themed terminal, and a bottom key bar with arrows, Tab, Esc and Ctrl-C" width="320">
+</p>
+
 ## Why
 
 ttyd's own HTML works great on desktop. On a phone it falls apart:

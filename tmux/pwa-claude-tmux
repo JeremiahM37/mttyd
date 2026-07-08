@@ -49,6 +49,7 @@ cd "$WORKDIR" || cd /
 tmux set-environment -gu CLAUDECODE       2>/dev/null
 tmux set-environment -gu CLAUDE_CODE_SSE_PORT  2>/dev/null
 tmux set-environment -gu CLAUDE_CODE_ENTRYPOINT 2>/dev/null
+tmux set-environment -gu CLAUDE_CODE_DISABLE_MOUSE 2>/dev/null
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     # -J joins any tmux-wrapped lines so xterm.js can re-wrap them at its own
@@ -74,30 +75,15 @@ fi
 #    threads stay pinned to a stale generation (e.g. claude-2/claude-3 were
 #    stuck on opus-4-6). The "opus" alias auto-tracks the newest Opus, so this
 #    keeps tracking future releases without further edits.
-exec tmux new-session -A -s "$SESSION" -c "$WORKDIR" -- \
-    bash -c '
-        unset CLAUDECODE CLAUDE_CODE_SSE_PORT CLAUDE_CODE_ENTRYPOINT
-        # Claude Code >=2.1.201 grabs terminal mouse tracking for its TUI. In an
-        # xterm.js/ttyd web terminal that captures touch/wheel scroll (you can no
-        # longer scroll the conversation) and its tracking escapes jumble the
-        # capture-pane replay on reattach. Disabling mouse restores both. Set
-        # here inside the exec bash — tmux spawns this child from the server env
-        # snapshot, not the wrapper env (same reason CLAUDECODE is unset here).
-        export CLAUDE_CODE_DISABLE_MOUSE=1
-        # Claude encodes the cwd as path with every non-alphanumeric char → "-".
-        # E.g. /home/admin/.claude-sessions/claude-2 → -home-admin--claude-sessions-claude-2
-        PROJ_KEY=$(pwd | sed "s|[^a-zA-Z0-9-]|-|g")
-        while true; do
-            if compgen -G "$HOME/.claude/projects/$PROJ_KEY/*.jsonl" >/dev/null 2>&1; then
-                claude --continue --model opus --dangerously-skip-permissions
-            else
-                claude --model opus --dangerously-skip-permissions
-            fi
-            status=$?
-            echo
-            echo "[pwa-claude-tmux] claude exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."
-            read -t 5 -n 1 && continue
-            echo "auto-restarting in 1s..."
-            sleep 1
-        done
-    '
+# The inner respawn loop lives in its own file (pwa-claude-inner.sh) rather than
+# an inline `bash -c '...'` string. The inline form was single-quoted, so one
+# apostrophe anywhere — even in a comment — broke the quoting and crash-looped
+# the terminal. As a real script it is plain bash and is syntax-checkable on its
+# own. Fall back to a plain shell if it is somehow missing, so a bad deploy can
+# never crash-loop: you land in a usable shell instead.
+INNER="$(dirname "$(readlink -f "$0")")/pwa-claude-inner.sh"
+if [ -r "$INNER" ]; then
+    exec tmux new-session -A -s "$SESSION" -c "$WORKDIR" -- bash "$INNER"
+else
+    exec tmux new-session -A -s "$SESSION" -c "$WORKDIR" -- bash -l
+fi

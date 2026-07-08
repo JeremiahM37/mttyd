@@ -147,14 +147,18 @@ def test_term_page_has_keybar_with_essentials(app_with_history):
 
 def test_term_page_does_not_reintroduce_old_broken_hacks(app_with_history):
     # Old wireTouchScroll() with manual scrollLines was glitchy. Old
-    # !important touch-action on .xterm-viewport / .xterm-screen fought
+    # !important touch-action CSS on .xterm-viewport / .xterm-screen fought
     # xterm.js's own mobile handling. Both replaced by the pointer-events
-    # approach above — make sure they don't sneak back.
+    # approach — make sure they don't sneak back. NOTE: JS *querying*
+    # .xterm-viewport is fine (wheel-forwarding dispatches events to xterm's
+    # own element); what's banned is CSS rules targeting those elements.
     client = TestClient(app_with_history)
     body = client.get("/term/7681").text
     assert "wireTouchScroll" not in body
-    assert ".xterm-viewport" not in body           # no custom CSS targeting it
-    assert ".xterm-screen" not in body             # ...or this
+    assert ".xterm-viewport {" not in body         # no CSS rule targeting it
+    assert ".xterm-screen {" not in body           # ...or this
+    assert ".xterm-viewport{" not in body
+    assert ".xterm-screen{" not in body
 
 
 def test_term_page_decodes_escape_sequences(app_with_history):

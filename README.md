@@ -22,6 +22,7 @@ ttyd's own HTML works great on desktop. On a phone it falls apart:
 | Android autocorrect inserts duplicate words | Gboard's predictive strip runs on xterm.js's hidden helper textarea | `inputmode="url"` + autocomplete/autocorrect/spellcheck off + a MutationObserver that re-applies the attrs if xterm.js ever resets them |
 | Can't type arrows, Tab, Esc, Ctrl-C | Phone keyboards either lack these keys or hide them several taps deep | Bottom key bar with all of them; long-press for secondary keys (PgUp/PgDn/Home/End/Shift-Tab/Ctrl-D) |
 | Reattaching to tmux shows empty scrollback | xterm.js's buffer starts empty per tab; tmux history isn't replayed | Optional wrapper script runs `tmux capture-pane -S -100000` before attach |
+| Can't scroll up in full-screen TUIs (Claude Code, htop, less, vim) | TUIs with mouse tracking redraw in place — nothing ever enters xterm.js scrollback, so a local scroll has nothing to move | When the foreground app has mouse tracking on, touch-drag is forwarded as wheel events, so the app scrolls its **own** content; plain shells keep the local smooth scroll |
 | Tmux alt-screen hides TUI history | Default tmux config | Recommended config disables it |
 
 ## Features
@@ -159,8 +160,8 @@ Default command is `claude --dangerously-skip-permissions`, but it's just
 two env vars:
 
 ```bash
-cp tmux/pwa-claude-tmux ~/.local/bin/
-chmod +x ~/.local/bin/pwa-claude-tmux
+cp tmux/pwa-claude-tmux tmux/pwa-claude-inner.sh ~/.local/bin/
+chmod +x ~/.local/bin/pwa-claude-tmux ~/.local/bin/pwa-claude-inner.sh
 
 # Claude (default):
 ttyd -p 7691 -W ~/.local/bin/pwa-claude-tmux

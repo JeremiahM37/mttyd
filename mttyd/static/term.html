@@ -423,7 +423,12 @@
         // hold arrow, repeat letter). The dedup was originally added for
         // the autocorrect compositionend double-fire which sends the same
         // multi-char string twice ~10ms apart; restrict to that case.
-        if (payload.length > 1) {
+        // Mouse reports (SGR "\x1b[<…M/m", normal "\x1b[M…") are legitimately
+        // repeated identically — a real wheel spins out many identical events.
+        // Never dedup them, or momentum/fast scroll in a mouse app stalls.
+        const isMouseReport = payload.charCodeAt(0) === 27 && payload[1] === '[' &&
+                              (payload[2] === '<' || payload[2] === 'M');
+        if (payload.length > 1 && !isMouseReport) {
           const last = _lastInputWrite.get(ws);
           const now  = Date.now();
           if (last && last.text === payload && (now - last.ts) < 100) {
@@ -565,6 +570,31 @@
         let startY = null, prevY = 0, prevT = 0;
         let scrolledLines = 0, velocity = 0, raf = null, activePtr = -1;
         let lpTimer = null, selecting = false, selStartRow = null;
+        // mouseMode: captured at pointerdown. True when the foreground PTY app
+        // has enabled mouse tracking (Claude Code TUI, tmux `mouse on`, vim,
+        // htop, less, …). Such apps redraw in place, so there's nothing in
+        // xterm's OWN scrollback to move — term.scrollLines() is a no-op and
+        // the drag looks dead ("can't scroll up"). Instead we forward the drag
+        // as wheel events so the app scrolls its OWN history/conversation, the
+        // same as a physical mouse wheel. Plain shells (mouseTrackingMode
+        // 'none') keep the local smooth-scroll of xterm's scrollback below.
+        let mouseMode = false, curX = 0, curY = 0;
+        const isMouseApp = () => term.modes && term.modes.mouseTrackingMode !== 'none';
+
+        // Route N lines of scroll to the app as discrete wheel ticks. xterm.js
+        // encodes each WheelEvent into the exact mouse-report protocol the app
+        // negotiated (SGR/normal/x10), so we don't hand-roll escape sequences.
+        // Negative = scroll up (toward older output).
+        function forwardWheel(lines, clientX, clientY) {
+          const vp = inner.querySelector('.xterm-viewport') || inner;
+          const dir = lines < 0 ? -1 : 1;
+          for (let i = 0, n = Math.abs(lines); i < n; i++) {
+            vp.dispatchEvent(new WheelEvent('wheel', {
+              deltaY: dir * 120, deltaMode: 0, bubbles: true, cancelable: true,
+              clientX, clientY,
+            }));
+          }
+        }
 
         function lineAtY(clientY) {
           const rect = inner.getBoundingClientRect();
@@ -580,7 +610,7 @@
           velocity *= Math.pow(FRICTION, dt / 16);
           if (Math.abs(velocity) < STOP_V) { raf = null; return; }
           const lines = Math.round(velocity * dt / PX_PER_LINE);
-          if (lines !== 0) term.scrollLines(lines);
+          if (lines !== 0) { mouseMode ? forwardWheel(lines, curX, curY) : term.scrollLines(lines); }
           raf = requestAnimationFrame(step);
         }
         inner.addEventListener('pointerdown', e => {
@@ -589,17 +619,23 @@
           try { inner.setPointerCapture(e.pointerId); } catch (_) {}
           activePtr = e.pointerId;
           startY = e.clientY; prevY = startY;
+          curX = e.clientX; curY = e.clientY;
           prevT = performance.now();
           scrolledLines = 0; velocity = 0; selecting = false;
-          // Arm long-press timer.
-          if (lpTimer) clearTimeout(lpTimer);
-          lpTimer = setTimeout(() => {
-            lpTimer = null;
-            selecting = true;
-            selStartRow = lineAtY(startY);
-            term.selectLines(selStartRow, selStartRow);
-            if (navigator.vibrate) navigator.vibrate(30);
-          }, LP_MS);
+          mouseMode = isMouseApp();
+          // Arm long-press-to-select only for plain shells. When a mouse app
+          // is in the foreground, xterm's own selection is disabled anyway and
+          // the drag is a scroll gesture, so the timer would just misfire.
+          if (!mouseMode) {
+            if (lpTimer) clearTimeout(lpTimer);
+            lpTimer = setTimeout(() => {
+              lpTimer = null;
+              selecting = true;
+              selStartRow = lineAtY(startY);
+              term.selectLines(selStartRow, selStartRow);
+              if (navigator.vibrate) navigator.vibrate(30);
+            }, LP_MS);
+          }
         });
         inner.addEventListener('pointermove', e => {
           if (e.pointerId !== activePtr || startY === null) return;
@@ -614,9 +650,10 @@
             return;
           }
           const y = e.clientY, t = performance.now();
+          curX = e.clientX; curY = y;
           const targetLines = Math.round((startY - y) / PX_PER_LINE);
           const delta = targetLines - scrolledLines;
-          if (delta !== 0) { term.scrollLines(delta); scrolledLines = targetLines; }
+          if (delta !== 0) { mouseMode ? forwardWheel(delta, curX, y) : term.scrollLines(delta); scrolledLines = targetLines; }
           velocity = (prevY - y) / Math.max(t - prevT, 1);
           prevY = y; prevT = t;
           if (e.cancelable) e.preventDefault();

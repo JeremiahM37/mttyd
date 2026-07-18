@@ -79,12 +79,14 @@
     .reconnect-overlay button { background: #6366f1; color: white; border: 0;
                                 padding: 12px 24px; border-radius: 6px;
                                 font-size: 15px; font-weight: 600; }
-    /* Snippets row (above keybar). */
-    #snippetbar { display: none; height: 44px; background: #0b1020;
+    /* Snippets + history-suggestions rows (above keybar). */
+    #snippetbar, #histbar { display: none; height: 44px; background: #0b1020;
                   border-top: 1px solid #1e293b; flex-shrink: 0;
                   overflow-x: auto; overflow-y: hidden; white-space: nowrap;
                   -webkit-overflow-scrolling: touch; }
-    #snippetbar.on { display: block; }
+    #snippetbar.on, #histbar.on { display: block; }
+    .histEmpty { display: inline-block; padding: 0 14px; line-height: 44px;
+                 color: #64748b; font-size: 13px; }
     .snipbtn { display: inline-block; height: 100%; padding: 0 14px;
                background: transparent; border: 0; border-right: 1px solid #1e293b;
                color: #cbd5e1; font-family: ui-monospace, Menlo, monospace;
@@ -154,6 +156,7 @@
       <button id="searchBtn"   class="toolbtn" aria-label="search">Find</button>
       <button id="copyBtn"     class="toolbtn" aria-label="copy">Copy</button>
       <button id="pasteBtn"    class="toolbtn" aria-label="paste">Paste</button>
+      <button id="histBtn"     class="toolbtn" aria-label="command history suggestions">Hist</button>
       <button id="settingsBtn" class="toolbtn icon" aria-label="settings">⚙</button>
     </div>
     <div id="searchbar">
@@ -165,6 +168,7 @@
     </div>
   </div>
   <div id="snippetbar"></div>
+  <div id="histbar"></div>
   <div id="keybar">
     <button class="keybtn" data-seq="\x1b[A" data-seq-long="\x1b[5~">↑</button>
     <button class="keybtn" data-seq="\x1b[B" data-seq-long="\x1b[6~">↓</button>
@@ -797,6 +801,7 @@
       requestAnimationFrame(() => active().resize());
       const s = active();
       location.hash = '#' + (s.sessionArg || s.port);
+      refreshHistbar();   // keep suggestions matched to the active tab's port
     }
 
     function addSessionTab() {
@@ -1131,6 +1136,57 @@
       drawer.classList.remove('on');
     });
     drawer.addEventListener('click', e => { if (e.target === drawer) drawer.classList.remove('on'); });
+
+    // ── history suggestions bar (Hist button) ───────────────────────────
+    // Tap "Hist" to toggle a horizontal row of ranked bash-history
+    // suggestions for the active tab's port, fetched from
+    // /api/term/history?port=N (frequency + recency ranking, server-side
+    // cache). Tapping a suggestion TYPES the command into the terminal —
+    // it does not press Enter, so you can edit before running. Ports
+    // without a configured history source just show a note.
+    const histbar = document.getElementById('histbar');
+    const HIST_MAX_SHOWN = 40;
+    const histCache = new Map();          // port -> commands[]
+    var histOpen = false;                 // var: read by setActive before init
+    async function fetchHistory(port) {
+      if (histCache.has(port)) return histCache.get(port);
+      let cmds = [];
+      try {
+        const r = await fetch('/api/term/history?port=' + port);
+        if (r.ok) cmds = (await r.json()).commands || [];
+      } catch (_) { /* offline / server gone — show empty note */ }
+      histCache.set(port, cmds);
+      return cmds;
+    }
+    function renderHistbar(cmds) {
+      histbar.innerHTML = '';
+      if (!cmds.length) {
+        const note = document.createElement('span');
+        note.className = 'histEmpty';
+        note.textContent = 'no history for this port';
+        histbar.appendChild(note);
+        return;
+      }
+      cmds.slice(0, HIST_MAX_SHOWN).forEach(cmd => {
+        const b = document.createElement('button');
+        b.className = 'snipbtn';
+        b.textContent = cmd;              // textContent: history is untrusted
+        b.addEventListener('click', () => {
+          const s = active();
+          if (s.ws.readyState === WebSocket.OPEN) sendWs(s.ws, '0', cmd);
+        });
+        histbar.appendChild(b);
+      });
+    }
+    function refreshHistbar() {
+      if (!histOpen) return;
+      fetchHistory(active().port).then(renderHistbar);
+    }
+    document.getElementById('histBtn').addEventListener('click', () => {
+      histOpen = !histOpen;
+      histbar.classList.toggle('on', histOpen);
+      refreshHistbar();
+    });
 
     // ── search bar (operates on active tab) ─────────────────────────────
     const searchbar = document.getElementById('searchbar');

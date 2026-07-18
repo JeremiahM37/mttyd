@@ -4,7 +4,8 @@ Serves two things:
   GET /term/{ports}           HTML wrapper that connects xterm.js to ttyd. Ports
                               may be a single integer ("7681") OR a comma-
                               separated list ("7681,7691,7692") for multi-tab.
-  GET /api/term/history?port  Ranked bash_history suggestions for the command bar
+  GET /api/term/history?port  Ranked bash_history suggestions, consumed by the
+                              page's "Hist" toolbar button (tap-to-type row)
 
 Configuration is a YAML file with a `ports` map:
     ports:

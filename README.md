@@ -29,10 +29,13 @@ ttyd's own HTML works great on desktop. On a phone it falls apart:
 
 - **Smooth touch scroll** with momentum (Pointer Events + `setPointerCapture`, no event coalescing)
 - **Key bar**: ↑ ↓ ← → Tab Esc ^C — long-press for PgUp/PgDn/Home/End/Shift-Tab/^D (haptic on long-press)
-- **Top toolbar**: Find · Copy · Paste · ⚙
+- **Top toolbar**: Find · Copy · Paste · Hist · ⚙
   - **Find** uses `@xterm/addon-search` for incremental search with highlights
   - **Copy** writes the current xterm.js selection to the system clipboard
   - **Paste** sends clipboard contents to the terminal as if typed
+  - **Hist** toggles a row of ranked bash-history suggestions
+    (`/api/term/history`, frequency + recency); tapping one types the
+    command into the terminal — you still press Enter to run it
 - **Settings drawer** (gear icon): font size, theme, per-feature toggles, snippet editor
 - **5 themes**: Dark · Light · Solarized Dark · Dracula · Nord
 - **Snippets bar**: optional horizontal row of one-tap commands (`label|command`, one per line)
@@ -185,7 +188,7 @@ history-limit).
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/term/{port}` | HTML wrapper page (404 if port not in config) |
-| GET | `/api/term/history?port=N` | `{commands: [...], cached: bool}` |
+| GET | `/api/term/history?port=N` | `{commands: [...], cached: bool}` — feeds the page's **Hist** suggestions row |
 | POST | `/api/term/kill?session=NAME` | `{killed: bool, session, error}` — runs `tmux kill-session -t NAME` |
 | GET | `/healthz` | `{ok: true, ports: [...]}` |
 

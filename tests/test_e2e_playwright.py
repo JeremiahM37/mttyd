@@ -201,7 +201,7 @@ def test_toolbar_buttons_visible(page, mttyd_server):
     base_url, port = mttyd_server
     page.goto(f"{base_url}/term/{port}")
     page.wait_for_selector(".xterm", timeout=10_000)
-    for sel in ("#tabAdd", "#searchBtn", "#copyBtn", "#pasteBtn", "#settingsBtn"):
+    for sel in ("#tabAdd", "#searchBtn", "#copyBtn", "#pasteBtn", "#histBtn", "#settingsBtn"):
         assert page.locator(sel).is_visible(), f"{sel} not visible"
 
 

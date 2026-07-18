@@ -313,6 +313,24 @@ def test_unknown_port_returns_404(app_with_history):
     assert client.get("/term/9999").status_code == 404
 
 
+def test_term_page_has_history_suggestions_ui(app_with_history):
+    # The /api/term/history endpoint has an in-page consumer: the "Hist"
+    # toolbar button toggles a row of ranked bash-history suggestions
+    # (same visual language as the snippets bar). Tapping one TYPES the
+    # command (no trailing \r — user reviews, then hits Enter).
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    assert 'id="histBtn"' in body                       # toggle button
+    assert 'id="histbar"' in body                       # suggestions row
+    assert "/api/term/history?port=" in body            # fetch wiring
+    assert "fetchHistory" in body and "renderHistbar" in body
+    assert "refreshHistbar" in body                     # re-fetch on tab switch
+    # Suggestions are inserted, not executed: the histbar click handler
+    # sends the raw command with no appended carriage return.
+    assert "sendWs(s.ws, '0', cmd)" in body
+    assert "sendWs(s.ws, '0', cmd + '\\r')" not in body
+
+
 def test_vendored_assets_are_served(app_with_history):
     # xterm.js + addons + css ship inside the package (mttyd/static/vendor/)
     # and are served by mttyd itself — offline LANs work and there's no

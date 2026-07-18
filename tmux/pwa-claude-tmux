@@ -5,13 +5,13 @@
 #
 # Session-name precedence:
 #   $1 (URL arg passed via ttyd --url-arg)
-#   $SESSION env var
+#   $MTTYD_SESSION env var (documented knob; $SESSION kept as legacy alias)
 #   default "claude"
 #
 # Before attaching, dump the existing pane's scrollback to stdout so xterm.js
 # (which starts with an empty buffer on each page load) lands with conversation
 # history visible.
-SESSION="${1:-${SESSION:-claude}}"
+SESSION="${1:-${MTTYD_SESSION:-${SESSION:-claude}}}"
 # Strip anything that isn't safe for a tmux session name. Without this the URL
 # arg could inject control chars or shell metacharacters.
 SESSION=$(echo "$SESSION" | tr -cd 'a-zA-Z0-9_-')
@@ -50,6 +50,18 @@ tmux set-environment -gu CLAUDECODE       2>/dev/null
 tmux set-environment -gu CLAUDE_CODE_SSE_PORT  2>/dev/null
 tmux set-environment -gu CLAUDE_CODE_ENTRYPOINT 2>/dev/null
 tmux set-environment -gu CLAUDE_CODE_DISABLE_MOUSE 2>/dev/null
+
+# Propagate MTTYD_CMD (command override for the inner respawn loop) into the
+# tmux server's global env. tmux spawns new-session children from the SERVER's
+# env snapshot, not from this wrapper's env — without this, an MTTYD_CMD set on
+# the ttyd invocation would never reach pwa-claude-inner.sh when the server
+# already exists. Unset it when we don't have one so a stale value from an
+# earlier launch can't leak into fresh sessions.
+if [ -n "$MTTYD_CMD" ]; then
+    tmux set-environment -g MTTYD_CMD "$MTTYD_CMD" 2>/dev/null
+else
+    tmux set-environment -gu MTTYD_CMD 2>/dev/null
+fi
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     # -J joins any tmux-wrapped lines so xterm.js can re-wrap them at its own

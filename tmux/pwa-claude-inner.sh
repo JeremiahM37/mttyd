@@ -28,21 +28,27 @@ unset CLAUDE_CODE_DISABLE_MOUSE
 # -home-admin--claude-sessions-claude-2.
 PROJ_KEY=$(pwd | sed 's|[^a-zA-Z0-9-]|-|g')
 
-# Respawn loop: if claude exits (WS drop, phone-screen-blank, crash), restart it.
-#  - --continue auto-resumes the saved conversation for this workdir, but only if
-#    one exists (a fresh workdir has no *.jsonl, and --continue would error out
-#    and spin the loop), hence the compgen gate.
+# Respawn loop: if the inner command exits (WS drop, phone-screen-blank,
+# crash), restart it.
+#  - MTTYD_CMD, when set, replaces the default claude invocation entirely
+#    (e.g. MTTYD_CMD="htop"). It's run through `bash -c` so a full command
+#    line with arguments works.
+#  - Otherwise, --continue auto-resumes the saved conversation for this
+#    workdir, but only if one exists (a fresh workdir has no *.jsonl, and
+#    --continue would error out and spin the loop), hence the compgen gate.
 #  - --model opus pins every launch to the latest Opus so resumed threads don't
 #    stay stuck on a stale generation.
 while true; do
-    if compgen -G "$HOME/.claude/projects/$PROJ_KEY/*.jsonl" >/dev/null 2>&1; then
+    if [ -n "$MTTYD_CMD" ]; then
+        bash -c "$MTTYD_CMD"
+    elif compgen -G "$HOME/.claude/projects/$PROJ_KEY/*.jsonl" >/dev/null 2>&1; then
         claude --continue --model opus --dangerously-skip-permissions
     else
         claude --model opus --dangerously-skip-permissions
     fi
     status=$?
     echo
-    echo "[pwa-claude-tmux] claude exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."
+    echo "[pwa-claude-tmux] inner command exited (status=$status). Press any key to restart, or Ctrl-C to drop to a shell."
     read -t 5 -n 1 && continue
     echo "auto-restarting in 1s..."
     sleep 1

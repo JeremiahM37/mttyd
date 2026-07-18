@@ -1,84 +1,52 @@
-# Verify the mttyd OSP itself — units, integration, headless-Chromium UI.
+# Verify mttyd — fully self-contained: verify boots mttyd's own uvicorn
+# (config-less mode: any port allowed, empty history) and every check runs
+# against that instance. No external service is required; earlier revisions
+# depended on a private homelab deployment (127.0.0.1:9105) serving the
+# wrapper page — that coupling is gone.
 #
-# Committed browser e2e coverage also lives in tests/test_e2e_playwright.py
-# (pytest-playwright). Those are tagged `e2e` and deselected by default, so the
-# `pytest -q` step below stays fast/offline; run them with `pytest -m e2e`
-# after `playwright install chromium`. The harness UI checks below additionally
-# exercise the identical wrapper page served live by homelab-api.
+# Written for the verify v0.2 schema (backend/launch/steps). The old
+# `checks:` format is silently ignored by verify >= 0.2.
+# Run: `pip install -e '.[test]' verify-cli mss` into .venv, then
+# `verify` from the repo root. backend: generic runs headless — steps are
+# deterministic shell assertions, no display or vision model needed.
+#
+# Browser-level coverage lives in tests/test_e2e_playwright.py
+# (pytest-playwright): boots this same server + a ttyd WebSocket stub and
+# asserts the page renders xterm, boots sessions, and doesn't CPU-pin the
+# event loop at init (the lockHelperAttrs/MutationObserver regression).
+# Those are tagged `e2e`/deselected by default; run with
+# `pip install -e '.[e2e]' && playwright install chromium && pytest -m e2e`.
 
-checks:
-  - name: tests
-    type: pytest
-    run: ".venv/bin/pytest -q"
+backend: generic
 
-  # mttyd doesn't run as a system service in this repo (the OSP is a library);
-  # we depend on homelab-api serving its identical wrapper page for the UI
-  # check, since the page logic is what mttyd ships.
+launch:
+  # Serve on a fixed loopback port for the duration of the run; verify
+  # terminates the process when the steps finish.
+  command: ".venv/bin/python -m uvicorn mttyd.server:create_app --factory --host 127.0.0.1 --port 8931 --log-level warning"
+  wait_after: 1.0
 
-  - name: term-page-via-homelab-api
-    type: http
-    targets:
-      - { url: "http://127.0.0.1:9105/term/7691",
-          status: 200,
-          contains: "createSession" }
-      - { url: "http://127.0.0.1:9105/term/7691,7691",
-          status: 200,
-          contains: "const PORTS = [7691, 7691]" }
-      - { url: "http://127.0.0.1:9105/term/notaport",
-          status: 400 }
+steps:
+  - name: unit tests
+    actions:
+      - shell: ".venv/bin/pytest -q"
 
-  - name: multi-tab-ui
-    type: ui
-    url: "http://127.0.0.1:9105/term/7691"
-    viewport: { width: 414, height: 896 }
-    steps:
-      - wait: ".xterm"
-      - sleep: 1.5                                    # let WS + capture-pane settle
-      - eval: "() => sessions.length === 1"
-      - eval: "() => typeof active === 'function'"    # tab-management API present
-      - expect_visible: "#tabAdd"                      # + button
-      - expect_visible: "#searchBtn"
-      - expect_visible: "#copyBtn"
-      - expect_visible: "#pasteBtn"
-      - expect_visible: "#settingsBtn"
+  - name: lint
+    actions:
+      - shell: ".venv/bin/ruff check ."
 
-  # Regression guard for the lockHelperAttrs / MutationObserver infinite loop
-  # (homelab-v37, 2026-06-04): page returned 200 with correct HTML, but the
-  # JS pinned the renderer at 100% CPU before term.open() could run, so
-  # nothing visible ever appeared on mobile. Tight step_timeout means a
-  # CPU-pinned page fails fast instead of looking like a slow network.
-  - name: page-init-no-infinite-loop
-    type: ui
-    url: "http://127.0.0.1:9105/term/7691"
-    viewport: { width: 414, height: 896 }
-    step_timeout: 6
-    steps:
-      - wait: ".xterm"                                # xterm.open() must complete
-      - eval: |
-          () => {
-            if (typeof sessions === 'undefined') return { ok:false, detail:'sessions never declared — JS hung before tab init' };
-            if (sessions.length < 1) return { ok:false, detail:'sessions.length=0' };
-            const ws = sessions[0].ws;
-            if (!ws) return { ok:false, detail:'no ws on session 0' };
-            // ws.readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
-            if (ws.readyState !== 1 && ws.readyState !== 0)
-              return { ok:false, detail:`ws.readyState=${ws.readyState} (expected OPEN or CONNECTING)` };
-            return { ok:true };
-          }
-      # If the MutationObserver/lockHelperAttrs loop were back, the input-log
-      # accumulator would not be running on a steady cadence — a real busy
-      # loop also blocks our setInterval renderers. Confirm setInterval ticks.
-      - eval: |
-          () => {
-            const t0 = performance.now();
-            return new Promise(res => {
-              setTimeout(() => {
-                const dt = performance.now() - t0;
-                // 250ms timer should fire within 600ms on a healthy page; a
-                // CPU-pinned event loop blocks it for much longer.
-                res(dt < 600
-                  ? { ok:true }
-                  : { ok:false, detail:`event loop stalled: 250ms timer took ${dt|0}ms` });
-              }, 250);
-            });
-          }
+  - name: server serves wrapper page and endpoints
+    actions:
+      # Readiness: healthz must answer within ~10s of launch.
+      - shell: "for i in $(seq 1 50); do curl -sf http://127.0.0.1:8931/healthz >/dev/null && exit 0; sleep 0.2; done; exit 1"
+      - shell: "curl -sf http://127.0.0.1:8931/term/7681 | grep -q createSession"
+      - shell: "curl -sf http://127.0.0.1:8931/term/7681 | grep -q '/static/vendor/xterm-5.5.0.js'"
+      - shell: "! curl -sf http://127.0.0.1:8931/term/7681 | grep -q cdn.jsdelivr.net"
+      - shell: "test \"$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8931/term/notaport)\" = 400"
+      - shell: "curl -sf 'http://127.0.0.1:8931/api/term/history?port=7681' | grep -q '\"commands\"'"
+
+  - name: vendored xterm assets served locally
+    actions:
+      - shell: "curl -sf http://127.0.0.1:8931/static/vendor/xterm-5.5.0.css | grep -qi xterm"
+      - shell: "test \"$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8931/static/vendor/xterm-5.5.0.js)\" = 200"
+      - shell: "test \"$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8931/static/vendor/addon-fit-0.10.0.js)\" = 200"
+      - shell: "test \"$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8931/static/vendor/addon-search-0.15.0.js)\" = 200"

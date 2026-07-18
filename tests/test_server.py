@@ -290,6 +290,12 @@ def test_term_page_has_reconnect_overlay(app_with_history):
     # Auto-reconnect with exponential backoff up to 3 attempts
     assert "reconnectAttempts" in body
     assert "Math.pow(2," in body
+    # The attempt counter must persist across the location.reload() the
+    # reconnect performs — sessionStorage, reset on successful ws.onopen —
+    # or the 3-attempt cap never engages (infinite reload loop).
+    assert "mttyd_reconnect_attempts" in body
+    assert "sessionStorage.setItem(RECONNECT_KEY" in body
+    assert "sessionStorage.removeItem(RECONNECT_KEY)" in body
 
 
 def test_term_page_has_snippet_bar(app_with_history):

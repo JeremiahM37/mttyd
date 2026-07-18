@@ -224,6 +224,10 @@
 
     // ── settings (shared across all tabs) ───────────────────────────────
     const SETTINGS_KEY = 'mttyd_settings';
+    // Auto-reconnect attempt counter. sessionStorage (per browser tab), NOT
+    // a JS variable: reconnecting reloads the page, which would wipe an
+    // in-memory count and defeat the 3-attempt cap.
+    const RECONNECT_KEY = 'mttyd_reconnect_attempts';
     const DEFAULTS = {
       fontSize: 12,
       theme: 'dark',
@@ -489,16 +493,24 @@
       // Optional `?arg=NAME` passes a session name through ttyd's --url-arg
       // flag to the pwa-claude-tmux wrapper, giving each tab an independent
       // tmux session (claude / claude-2 / claude-3 / etc.).
-      const wsUrl = 'ws://' + HOST + ':' + port + '/ws'
+      // Scheme follows the page: wss: when served over https (a hardcoded
+      // ws: would be blocked as mixed content), ws: otherwise.
+      const wsProto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+      const wsUrl = wsProto + HOST + ':' + port + '/ws'
                   + (sessionArg ? '?arg=' + encodeURIComponent(sessionArg) : '');
       const ws = new WebSocket(wsUrl, ['tty']);
       ws.binaryType = 'arraybuffer';
 
       const session = { port, sessionArg, term, fit, search, ws, wrap, inner,
-                        overlay, reconnectAttempts: 0, hasUnread: false };
+                        overlay, hasUnread: false };
 
-      ws.onopen = () => sendWs(ws, '{',
-        JSON.stringify({ AuthToken: "", columns: term.cols, rows: term.rows }));
+      ws.onopen = () => {
+        // Successful connect resets the auto-reconnect budget (it lives in
+        // sessionStorage because reconnecting reloads the whole page).
+        sessionStorage.removeItem(RECONNECT_KEY);
+        sendWs(ws, '{',
+          JSON.stringify({ AuthToken: "", columns: term.cols, rows: term.rows }));
+      };
 
       ws.onmessage = (ev) => {
         const buf  = new Uint8Array(ev.data);
@@ -520,8 +532,15 @@
       };
       ws.onclose = () => {
         term.writeln('\r\n[connection closed]\r\n');
-        if (settings.autoReconnect && session.reconnectAttempts < 3) {
-          setTimeout(() => location.reload(), 1000 * Math.pow(2, session.reconnectAttempts++));
+        // The attempt counter must survive the location.reload() below —
+        // an in-memory counter resets on every reload, so the 3-attempt cap
+        // would never engage and a dead server meant an infinite reload
+        // loop. sessionStorage persists per browser tab and is cleared on
+        // the next successful ws.onopen.
+        const reconnectAttempts = parseInt(sessionStorage.getItem(RECONNECT_KEY), 10) || 0;
+        if (settings.autoReconnect && reconnectAttempts < 3) {
+          sessionStorage.setItem(RECONNECT_KEY, String(reconnectAttempts + 1));
+          setTimeout(() => location.reload(), 1000 * Math.pow(2, reconnectAttempts));
         } else {
           overlay.classList.add('on');
         }

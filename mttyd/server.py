@@ -26,6 +26,7 @@ from typing import Any
 import yaml
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from .history import rank_commands, read_history
 
@@ -47,6 +48,10 @@ def create_app(config_path: str | None = None) -> FastAPI:
     app = FastAPI(title="mttyd", version="0.1.0")
     ports = load_config(config_path)
     cache: dict[int, tuple[float, list[str]]] = {}
+
+    # Vendored xterm.js + addons (pinned versions committed to the package)
+    # so the page works on offline LANs and doesn't pull script from a CDN.
+    app.mount("/static/vendor", StaticFiles(directory=HERE / "static" / "vendor"), name="vendor")
 
     @app.get("/term/{ports_spec}")
     async def term_page(ports_spec: str) -> HTMLResponse:

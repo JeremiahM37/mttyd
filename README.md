@@ -64,10 +64,12 @@ ports:
 Open `http://your-server:8080/term/7681` on your phone. (Or `--config`-less
 for a single LAN box — see below.)
 
-The page is a single self-contained HTML document. xterm.js + FitAddon +
-SearchAddon load from a CDN, the WebSocket connects directly to ttyd at
-`ws://host:7681/ws`, and mttyd only ever serves the wrapper page and the
-optional bash-history endpoint.
+The page is a single HTML document. xterm.js + FitAddon + SearchAddon are
+vendored inside the package (pinned upstream builds under
+`mttyd/static/vendor/`, served at `/static/vendor/…`), so everything works
+on an offline LAN and nothing loads from a CDN. The WebSocket connects
+directly to ttyd at `ws://host:7681/ws`; mttyd only ever serves the wrapper
+page, its static assets, and the optional bash-history endpoint.
 
 ## Multi-tab (one page, multiple terminals)
 
@@ -225,7 +227,8 @@ playwright install chromium      # one-time browser download
 pytest -m e2e
 ```
 
-(They load xterm.js from a CDN, so running them needs an internet connection.)
+(xterm.js and its addons are vendored into the package, so once Chromium is
+installed the e2e run works fully offline.)
 
 ## License
 

@@ -55,4 +55,4 @@ select = ["E", "F", "W"]
 include = ["mttyd*"]
 
 [tool.setuptools.package-data]
-mttyd = ["static/*.html"]
+mttyd = ["static/*.html", "static/vendor/*"]

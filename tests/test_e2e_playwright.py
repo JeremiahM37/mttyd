@@ -18,8 +18,9 @@ They are tagged with the ``e2e`` marker and are *deselected by default*
 
 A throwaway WebSocket server stands in for ttyd on the configured port so the
 page's per-tab WebSocket reaches OPEN/CONNECTING, letting the regression guard
-assert real connection state. xterm.js and its addons load from a CDN, so an
-internet connection is required to run these.
+assert real connection state. xterm.js and its addons are vendored into the
+package and served by mttyd itself, so no internet connection is needed once
+the Chromium browser has been installed.
 """
 from __future__ import annotations
 

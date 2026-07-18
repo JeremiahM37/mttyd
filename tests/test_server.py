@@ -26,7 +26,9 @@ def test_term_page_serves_html_with_xterm_and_keyboard_fix(app_with_history):
     r = client.get("/term/7681")
     assert r.status_code == 200
     body = r.text
-    assert "@xterm/xterm" in body                  # xterm.js loaded
+    assert '"/static/vendor/xterm-5.5.0.js"' in body   # vendored xterm.js (no CDN)
+    assert '"/static/vendor/xterm-5.5.0.css"' in body  # vendored stylesheet
+    assert "cdn.jsdelivr.net" not in body          # no CDN references remain
     assert "const PORTS = [7681]" in body          # template substitution (multi-tab array form)
     assert "sendWs(ws, '{'" in body                # correct ttyd auth opcode
     assert "xterm-helper-textarea" in body         # Gboard duplicate-word fix
@@ -255,8 +257,8 @@ def test_term_page_has_search_toolbar(app_with_history):
     assert 'id="searchbar"' in body
     assert 'id="searchInput"' in body
     assert 'id="searchBtn"' in body
-    # @xterm/addon-search loaded from CDN
-    assert "addon-search" in body
+    # vendored @xterm/addon-search served locally
+    assert '"/static/vendor/addon-search-0.15.0.js"' in body
     assert "SearchAddon" in body
     assert "findNext" in body and "findPrevious" in body
 
@@ -309,6 +311,22 @@ def test_term_page_has_snippet_bar(app_with_history):
 def test_unknown_port_returns_404(app_with_history):
     client = TestClient(app_with_history)
     assert client.get("/term/9999").status_code == 404
+
+
+def test_vendored_assets_are_served(app_with_history):
+    # xterm.js + addons + css ship inside the package (mttyd/static/vendor/)
+    # and are served by mttyd itself — offline LANs work and there's no
+    # CDN supply-chain exposure. Each asset the page references must be
+    # resolvable with the right content type family.
+    client = TestClient(app_with_history)
+    body = client.get("/term/7681").text
+    for asset in ("xterm-5.5.0.css", "xterm-5.5.0.js",
+                  "addon-fit-0.10.0.js", "addon-search-0.15.0.js"):
+        url = f"/static/vendor/{asset}"
+        assert url in body, f"page does not reference {url}"
+        r = client.get(url)
+        assert r.status_code == 200, f"{url} not served"
+        assert len(r.content) > 500, f"{url} suspiciously small"
 
 
 def test_history_endpoint_returns_ranked_commands(app_with_history):

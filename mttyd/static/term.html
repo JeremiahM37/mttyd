@@ -8,7 +8,9 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>mttyd</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+  <!-- Vendored copy of @xterm/xterm@5.5.0 css — served by mttyd itself so
+       the page works on offline LANs (no CDN, no supply-chain exposure). -->
+  <link rel="stylesheet" href="/static/vendor/xterm-5.5.0.css">
   <style>
     html, body { margin: 0; padding: 0; height: 100%; background: #000;
                  overscroll-behavior: none; touch-action: none;
@@ -208,9 +210,12 @@
       <button id="settingsDone" class="done">Done</button>
     </div>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js"></script>
+  <!-- Vendored @xterm/xterm@5.5.0, @xterm/addon-fit@0.10.0,
+       @xterm/addon-search@0.15.0 (pinned upstream builds, committed under
+       mttyd/static/vendor/ and served locally instead of from a CDN). -->
+  <script src="/static/vendor/xterm-5.5.0.js"></script>
+  <script src="/static/vendor/addon-fit-0.10.0.js"></script>
+  <script src="/static/vendor/addon-search-0.15.0.js"></script>
   <script>
     // mttyd multi-tab wrapper.
     //

@@ -39,8 +39,6 @@ def test_term_page_supports_multi_tab(app_with_history):
     # all live concurrently in one page.
     client = TestClient(app_with_history)
     # Need a config that includes all three ports for this test
-    import textwrap
-    from pathlib import Path
     from mttyd.server import create_app
     multi = create_app(None)   # config-less mode allows any port
     client = TestClient(multi)

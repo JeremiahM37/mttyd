@@ -1,5 +1,5 @@
-"""rank_commands — frequency × recency ordering."""
-from mttyd.history import rank_commands
+"""rank_commands — frequency × recency ordering; ssh command hardening."""
+from mttyd.history import _ssh_cmd, rank_commands
 
 
 def test_empty_input_returns_empty_list():
@@ -38,3 +38,18 @@ def test_drops_timestamps_and_short_lines():
 def test_respects_limit():
     history = "\n".join(f"cmd-{i}" for i in range(500))
     assert len(rank_commands(history, limit=10)) == 10
+
+
+def test_ssh_cmd_defaults_to_accept_new(monkeypatch):
+    # `no` silently trusted changed host keys (MITM-friendly). Default is
+    # accept-new: trust on first use, refuse a changed key.
+    monkeypatch.delenv("MTTYD_SSH_STRICT_HOST_KEY_CHECKING", raising=False)
+    cmd = _ssh_cmd("user@host", "~/.bash_history")
+    assert "StrictHostKeyChecking=accept-new" in cmd
+    assert "StrictHostKeyChecking=no" not in cmd
+    assert cmd[-2:] == ["user@host", "cat ~/.bash_history"]
+
+
+def test_ssh_cmd_host_key_policy_env_override(monkeypatch):
+    monkeypatch.setenv("MTTYD_SSH_STRICT_HOST_KEY_CHECKING", "yes")
+    assert "StrictHostKeyChecking=yes" in _ssh_cmd("u@h", "~/.bash_history")

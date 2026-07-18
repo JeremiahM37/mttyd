@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -38,6 +39,22 @@ def rank_commands(history_text: str, limit: int = 200) -> list[str]:
     return [c for c, _ in sorted(counts.items(), key=score)[:limit]]
 
 
+def _ssh_cmd(target: str, remote_path: str) -> list[str]:
+    """Build the ssh command used for `history: {ssh: ...}` sources.
+
+    Host key policy defaults to `accept-new` (trust on first use, but
+    REFUSE a changed key — unlike the old `no`, which silently accepted
+    MITM'd hosts). Override with MTTYD_SSH_STRICT_HOST_KEY_CHECKING, which
+    is passed straight to ssh's StrictHostKeyChecking option (`yes`, `no`,
+    `accept-new`, `ask`).
+    """
+    strict = os.environ.get("MTTYD_SSH_STRICT_HOST_KEY_CHECKING", "accept-new")
+    return [
+        "ssh", "-o", f"StrictHostKeyChecking={strict}", "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=4", target, f"cat {remote_path}",
+    ]
+
+
 async def read_history(source: dict) -> str:
     """Read bash_history for one port. Source is either:
         {"file": "/path/to/.bash_history"}
@@ -55,10 +72,7 @@ async def read_history(source: dict) -> str:
     if "ssh" in source:
         target = source["ssh"]
         remote_path = source.get("path", "~/.bash_history")
-        cmd = [
-            "ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=4", target, f"cat {remote_path}",
-        ]
+        cmd = _ssh_cmd(target, remote_path)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

@@ -148,6 +148,13 @@ Each port entry in `mttyd.yaml` declares one of:
 - `history: { file: /path/to/.bash_history }` — read a local file
 - `history: { ssh: user@host, path: ~/.bash_history }` — pull over SSH (uses your agent / keys)
 
+SSH sources run non-interactively (`BatchMode=yes`) with
+`StrictHostKeyChecking=accept-new`: unknown hosts are trusted on first
+use, but a **changed** host key is refused instead of silently accepted.
+Set `MTTYD_SSH_STRICT_HOST_KEY_CHECKING` (`yes` / `no` / `accept-new` /
+`ask`) in mttyd's environment to override — e.g. `yes` if you pre-populate
+`known_hosts` and want unknown hosts refused too.
+
 Ports not listed return 404 from `/term/{port}`. That's the access-control
 mechanism — keep the file tight.
 

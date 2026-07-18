@@ -105,6 +105,49 @@ def test_kill_endpoint_accepts_safe_session_name():
     assert "killed" in body
 
 
+def test_kill_endpoint_rejects_sessions_outside_prefix(monkeypatch):
+    # Only sessions under the allowed prefix (default "claude-") are
+    # killable — the endpoint must not be able to nuke arbitrary tmux
+    # sessions on the host.
+    from mttyd.server import create_app
+    monkeypatch.delenv("MTTYD_KILL_PREFIX", raising=False)
+    client = TestClient(create_app(None))
+    assert client.post("/api/term/kill?session=some-other-session").status_code == 403
+    assert client.post("/api/term/kill?session=work").status_code == 403
+    # "claude" (no trailing dash) is both reserved and outside the prefix
+    assert client.post("/api/term/kill?session=claude").status_code == 403
+
+
+def test_kill_endpoint_prefix_is_configurable(monkeypatch):
+    from mttyd.server import create_app
+    monkeypatch.setenv("MTTYD_KILL_PREFIX", "scratch-")
+    client = TestClient(create_app(None))
+    assert client.post("/api/term/kill?session=scratch-a").status_code == 200
+    # Default prefix no longer allowed once overridden
+    assert client.post("/api/term/kill?session=claude-2").status_code == 403
+
+
+def test_kill_endpoint_enforces_token_when_configured(monkeypatch):
+    from mttyd.server import create_app
+    monkeypatch.setenv("MTTYD_KILL_TOKEN", "sekrit")
+    client = TestClient(create_app(None))
+    # No header → 401; wrong header → 401
+    assert client.post("/api/term/kill?session=claude-2").status_code == 401
+    assert client.post("/api/term/kill?session=claude-2",
+                       headers={"X-Mttyd-Token": "wrong"}).status_code == 401
+    # Correct header → request proceeds (200; killed=False since no such session)
+    r = client.post("/api/term/kill?session=claude-test-doesnt-exist",
+                    headers={"X-Mttyd-Token": "sekrit"})
+    assert r.status_code == 200
+
+
+def test_kill_endpoint_no_token_required_when_unset(monkeypatch):
+    from mttyd.server import create_app
+    monkeypatch.delenv("MTTYD_KILL_TOKEN", raising=False)
+    client = TestClient(create_app(None))
+    assert client.post("/api/term/kill?session=claude-test-doesnt-exist").status_code == 200
+
+
 def test_term_page_has_smooth_pointer_scroll(app_with_history):
     # Smooth scroll via Pointer Events + setPointerCapture. Without this,
     # mobile scroll is choppy and sometimes drops events.

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 
 from .history import rank_commands, read_history
@@ -32,6 +32,7 @@ from .history import rank_commands, read_history
 HERE = Path(__file__).parent
 TEMPLATE = (HERE / "static" / "term.html").read_text()
 CACHE_TTL = 300
+SESSION_NAME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 
 
 def load_config(path: str | None) -> dict[int, dict[str, Any]]:
@@ -83,21 +84,44 @@ def create_app(config_path: str | None = None) -> FastAPI:
         return {"commands": commands, "cached": False}
 
     @app.post("/api/term/kill")
-    async def term_kill(session: str) -> dict:
+    async def term_kill(
+        session: str,
+        x_mttyd_token: str | None = Header(default=None),
+    ) -> dict:
         """Kill a local tmux session by name. Used by the page's `×` button
         on user-spawned tabs so closed claudes don't pile up as zombies.
-        Rejects names that aren't [a-zA-Z0-9_-] (sanitization against
-        command injection through whatever calls this endpoint).
-        Refuses to kill names in a small reserved set so the page can't
-        accidentally nuke the user's main session."""
-        if not session or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in session):
+
+        Hardening (this is a state-changing endpoint reachable by any
+        client that can hit the server, including cross-site form POSTs):
+          - Names must be [a-zA-Z0-9_-] (sanitization against command
+            injection through whatever calls this endpoint).
+          - Names in a small reserved set are refused so the page can't
+            accidentally nuke the user's main session.
+          - Only sessions starting with MTTYD_KILL_PREFIX (default
+            "claude-", the prefix the page's `+` button generates) are
+            killable — arbitrary tmux sessions on the box are off-limits.
+          - If MTTYD_KILL_TOKEN is set in the environment, requests must
+            carry it in an X-Mttyd-Token header. Custom headers can't be
+            sent by cross-site form posts, so this also acts as a CSRF
+            guard.
+        """
+        token = os.environ.get("MTTYD_KILL_TOKEN")
+        if token and x_mttyd_token != token:
+            raise HTTPException(401, "missing or invalid X-Mttyd-Token")
+        if not session or any(c not in SESSION_NAME_CHARS for c in session):
             raise HTTPException(400, "invalid session name")
         if session in {"claude", "main", "default"}:
             raise HTTPException(403, "refusing to kill reserved session")
-        proc = await asyncio.create_subprocess_exec(
-            "tmux", "kill-session", "-t", session,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
+        prefix = os.environ.get("MTTYD_KILL_PREFIX", "claude-")
+        if not session.startswith(prefix):
+            raise HTTPException(403, f"refusing to kill session outside prefix {prefix!r}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "kill-session", "-t", session,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            return {"killed": False, "session": session, "error": "tmux not found"}
         _, err = await proc.communicate()
         return {"killed": proc.returncode == 0,
                 "session": session,

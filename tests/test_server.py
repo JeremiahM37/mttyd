@@ -39,8 +39,6 @@ def test_term_page_supports_multi_tab(app_with_history):
     # all live concurrently in one page.
     client = TestClient(app_with_history)
     # Need a config that includes all three ports for this test
-    import textwrap
-    from pathlib import Path
     from mttyd.server import create_app
     multi = create_app(None)   # config-less mode allows any port
     client = TestClient(multi)
@@ -103,6 +101,49 @@ def test_kill_endpoint_accepts_safe_session_name():
     body = r.json()
     assert body["session"] == "claude-test-doesnt-exist"
     assert "killed" in body
+
+
+def test_kill_endpoint_rejects_sessions_outside_prefix(monkeypatch):
+    # Only sessions under the allowed prefix (default "claude-") are
+    # killable — the endpoint must not be able to nuke arbitrary tmux
+    # sessions on the host.
+    from mttyd.server import create_app
+    monkeypatch.delenv("MTTYD_KILL_PREFIX", raising=False)
+    client = TestClient(create_app(None))
+    assert client.post("/api/term/kill?session=some-other-session").status_code == 403
+    assert client.post("/api/term/kill?session=work").status_code == 403
+    # "claude" (no trailing dash) is both reserved and outside the prefix
+    assert client.post("/api/term/kill?session=claude").status_code == 403
+
+
+def test_kill_endpoint_prefix_is_configurable(monkeypatch):
+    from mttyd.server import create_app
+    monkeypatch.setenv("MTTYD_KILL_PREFIX", "scratch-")
+    client = TestClient(create_app(None))
+    assert client.post("/api/term/kill?session=scratch-a").status_code == 200
+    # Default prefix no longer allowed once overridden
+    assert client.post("/api/term/kill?session=claude-2").status_code == 403
+
+
+def test_kill_endpoint_enforces_token_when_configured(monkeypatch):
+    from mttyd.server import create_app
+    monkeypatch.setenv("MTTYD_KILL_TOKEN", "sekrit")
+    client = TestClient(create_app(None))
+    # No header → 401; wrong header → 401
+    assert client.post("/api/term/kill?session=claude-2").status_code == 401
+    assert client.post("/api/term/kill?session=claude-2",
+                       headers={"X-Mttyd-Token": "wrong"}).status_code == 401
+    # Correct header → request proceeds (200; killed=False since no such session)
+    r = client.post("/api/term/kill?session=claude-test-doesnt-exist",
+                    headers={"X-Mttyd-Token": "sekrit"})
+    assert r.status_code == 200
+
+
+def test_kill_endpoint_no_token_required_when_unset(monkeypatch):
+    from mttyd.server import create_app
+    monkeypatch.delenv("MTTYD_KILL_TOKEN", raising=False)
+    client = TestClient(create_app(None))
+    assert client.post("/api/term/kill?session=claude-test-doesnt-exist").status_code == 200
 
 
 def test_term_page_has_smooth_pointer_scroll(app_with_history):
@@ -247,6 +288,12 @@ def test_term_page_has_reconnect_overlay(app_with_history):
     # Auto-reconnect with exponential backoff up to 3 attempts
     assert "reconnectAttempts" in body
     assert "Math.pow(2," in body
+    # The attempt counter must persist across the location.reload() the
+    # reconnect performs — sessionStorage, reset on successful ws.onopen —
+    # or the 3-attempt cap never engages (infinite reload loop).
+    assert "mttyd_reconnect_attempts" in body
+    assert "sessionStorage.setItem(RECONNECT_KEY" in body
+    assert "sessionStorage.removeItem(RECONNECT_KEY)" in body
 
 
 def test_term_page_has_snippet_bar(app_with_history):

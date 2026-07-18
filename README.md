@@ -125,7 +125,10 @@ That's it. Now:
 - The `×` on each extra tab calls `POST /api/term/kill?session=NAME` —
   mttyd runs `tmux kill-session -t NAME` so closed claudes don't pile up.
   Reserved session names (`claude`, `main`, `default`) are refused so you
-  can't accidentally kill your primary.
+  can't accidentally kill your primary, and only sessions under the
+  `claude-` prefix (configurable via `MTTYD_KILL_PREFIX`, optionally
+  token-gated via `MTTYD_KILL_TOKEN`) are killable — see the security
+  note under [Endpoints](#endpoints).
 - Extra tabs persist in localStorage per-port — next visit restores them.
 
 Security: `--url-arg` lets any client pass arbitrary command-line args to
@@ -181,7 +184,18 @@ history-limit).
 |---|---|---|
 | GET | `/term/{port}` | HTML wrapper page (404 if port not in config) |
 | GET | `/api/term/history?port=N` | `{commands: [...], cached: bool}` |
+| POST | `/api/term/kill?session=NAME` | `{killed: bool, session, error}` — runs `tmux kill-session -t NAME` |
 | GET | `/healthz` | `{ok: true, ports: [...]}` |
+
+**Security note on `/api/term/kill`:** it's a state-changing endpoint, so
+it's locked down in three ways. Session names must match `[a-zA-Z0-9_-]`,
+reserved names (`claude`, `main`, `default`) are always refused, and only
+sessions starting with the allowed prefix are killable — `claude-` by
+default (what the page's `+` button generates), overridable with
+`MTTYD_KILL_PREFIX`. For anything beyond a trusted LAN, also set
+`MTTYD_KILL_TOKEN` in mttyd's environment: requests must then send it in
+an `X-Mttyd-Token` header (custom headers can't be produced by cross-site
+form posts, so this doubles as a CSRF guard).
 
 ## Tests
 
